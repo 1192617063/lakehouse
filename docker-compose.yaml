@@ -1,0 +1,469 @@
+services:
+  namenode:
+    image: ${HADOOP_IMAGE}
+    container_name: namenode
+    hostname: namenode.lakehouse.com
+    command: ["hdfs", "namenode"]
+    environment:
+      - HADOOP_HOME=/opt/hadoop
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.41
+    ports: ["9870:9870"]
+    volumes:
+      - ./conf/hadoop:/opt/hadoop/etc/hadoop
+      - ./data/hadoop/namenode:/data/namenode
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+    mem_limit: 1g
+
+  datanode:
+    image: ${HADOOP_IMAGE}
+    container_name: datanode
+    hostname: datanode.lakehouse.com
+    user: root
+    command: ["hdfs", "datanode"]
+    environment:
+      - HADOOP_HOME=/opt/hadoop
+    depends_on: [namenode]
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.42
+    volumes:
+      - ./conf/hadoop:/opt/hadoop/etc/hadoop
+      - ./data/hadoop/datanode:/data/datanode
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+    mem_limit: 1.5g
+
+  hive-metastore:
+    image: ${HIVE_IMAGE}
+    container_name: hive-metastore
+    hostname: hivemetastore.lakehouse.com
+    environment:
+      SERVICE_NAME: metastore
+      IS_RESUME: "true"
+      HIVE_CUSTOM_CONF_DIR: /opt/hive/custom-conf
+    ports: ["9083:9083"]
+    depends_on: [namenode, mysql]
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.43
+    volumes:
+      - ./lib/mysql/mysql-connector-j-8.4.0.jar:/opt/hive/lib/mysql-connector-j-8.4.0.jar:ro
+      - ./lib/empty:/opt/tez:ro
+      - ./lib/hadoop-3.3.6:/opt/hadoop:ro
+      - ./conf/hive:/opt/hive/custom-conf:ro
+      - ./conf/hadoop/core-site.xml:/opt/hive/conf/core-site.xml:ro
+      - ./conf/hadoop/hdfs-site.xml:/opt/hive/conf/hdfs-site.xml:ro
+      - ./conf/hadoop/yarn-site.xml:/opt/hive/conf/yarn-site.xml:ro
+      - ./conf/hadoop/mapred-site.xml:/opt/hive/conf/mapred-site.xml:ro
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+    mem_limit: 1g
+
+  hive-server:
+    image: ${HIVE_IMAGE}
+    container_name: hive-server
+    hostname: hiveserver.lakehouse.com
+    environment:
+      SERVICE_NAME: hiveserver2
+      IS_RESUME: "true"
+      HIVE_CUSTOM_CONF_DIR: /opt/hive/custom-conf
+    ports: ["21066:21066", "21067:21067"]
+    depends_on: [hive-metastore]
+    volumes:
+      - ./lib/mysql/mysql-connector-j-8.4.0.jar:/opt/hive/lib/mysql-connector-j-8.4.0.jar:ro
+      - ./lib/empty:/opt/tez:ro
+      - ./lib/hadoop-3.3.6:/opt/hadoop:ro
+      - ./conf/hive:/opt/hive/custom-conf:ro
+      - ./conf/hadoop/core-site.xml:/opt/hive/conf/core-site.xml:ro
+      - ./conf/hadoop/hdfs-site.xml:/opt/hive/conf/hdfs-site.xml:ro
+      - ./conf/hadoop/yarn-site.xml:/opt/hive/conf/yarn-site.xml:ro
+      - ./conf/hadoop/mapred-site.xml:/opt/hive/conf/mapred-site.xml:ro
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.44
+    mem_limit: 1g
+
+  iceberg-rest:
+    image: lakehouse-iceberg-rest:1.10.1
+    build:
+      context: ./build/iceberg-rest
+    container_name: iceberg-rest
+    environment:
+      CATALOG_NAME: iceberg_rest
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      CATALOG_WAREHOUSE: hdfs://namenode:9000/user/iceberg
+      CATALOG_HADOOP__CONF__DIR: /opt/hadoop/etc/hadoop
+      CATALOG_CATALOG__IMPL: org.apache.iceberg.jdbc.JdbcCatalog
+      CATALOG_URI: jdbc:mysql://mysql:3306/iceberg_catalog?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8
+      CATALOG_JDBC_USER: iceberg
+      CATALOG_JDBC_PASSWORD: iceberg
+    ports: ["8181:8181"]
+    volumes:
+      - ./lib/mysql/mysql-connector-j-8.4.0.jar:/opt/iceberg/libs/mysql-connector-j-8.4.0.jar:ro
+      - ./lib/hadoop-3.3.6/share/hadoop/common:/opt/hadoop/share/hadoop/common:ro
+      - ./lib/hadoop-3.3.6/share/hadoop/hdfs:/opt/hadoop/share/hadoop/hdfs:ro
+      - ./conf/hadoop:/opt/hadoop/etc/hadoop:ro
+      - ./conf/kerberos/iceberg-rest-jaas.conf:/opt/iceberg/conf/iceberg-rest-jaas.conf:ro
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.50
+    depends_on: [namenode, mysql]
+    mem_limit: 1g
+
+  kafka:
+    image: ${KAFKA_IMAGE}
+    container_name: kafka
+    hostname: kafka.lakehouse.com
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: SASL_PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: SASL_PLAINTEXT://kafka.lakehouse.com:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_SECURITY_INTER_BROKER_PROTOCOL: SASL_PLAINTEXT
+      KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: GSSAPI
+      KAFKA_SASL_ENABLED_MECHANISMS: GSSAPI
+      KAFKA_SASL_KERBEROS_SERVICE_NAME: kafka
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OPTS: "-Djava.security.auth.login.config=/etc/kafka/kafka_server_jaas.conf -Dsun.security.krb5.debug=false"
+    ports:
+      - "9092:9092"
+    volumes:
+      - ./data/kafka:/var/lib/kafka/data
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+      - ./conf/kafka/kafka_server_jaas.conf:/etc/kafka/kafka_server_jaas.conf:ro
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.2
+    mem_limit: 1.5g
+
+  flink-jobmanager:
+    image: ${FLINK_IMAGE}
+    build:
+      context: .
+      dockerfile: build/flink/Dockerfile
+      args:
+        FLINK_BASE_IMAGE: ${FLINK_BASE_IMAGE}
+    container_name: flink-jobmanager
+    hostname: flink-jobmanager.lakehouse.com
+    command: jobmanager
+    environment:
+      FLINK_CLASSPATH: /opt/flink/lib/extra/*
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      HADOOP_HOME: /opt/hadoop
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./conf/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml:ro
+      - ./conf/flink/sql-client-defaults.yaml:/opt/flink/conf/sql-client-defaults.yaml:ro
+      - ./conf/flink/sql-client-init.sql:/opt/flink/conf/sql-client-init.sql:ro
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+      - ./conf/hadoop:/opt/hadoop/etc/hadoop:ro
+      - ./conf/hive/hive-site.xml:/opt/flink/conf/hive-site.xml:ro
+      - ./data/flink/catalog-store:/opt/flink/conf/catalog-store
+      - ./sql:/opt/flink/sql
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.3
+    mem_limit: 4g
+
+  flink-taskmanager:
+    image: ${FLINK_IMAGE}
+    build:
+      context: .
+      dockerfile: build/flink/Dockerfile
+      args:
+        FLINK_BASE_IMAGE: ${FLINK_BASE_IMAGE}
+    container_name: flink-taskmanager
+    hostname: flink-taskmanager.lakehouse.com
+    command: taskmanager
+    environment:
+      FLINK_CLASSPATH: /opt/flink/lib/extra/*
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      HADOOP_HOME: /opt/hadoop
+    depends_on:
+      - flink-jobmanager
+    volumes:
+      - ./conf/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml:ro
+      - ./conf/flink/sql-client-defaults.yaml:/opt/flink/conf/sql-client-defaults.yaml:ro
+      - ./conf/flink/sql-client-init.sql:/opt/flink/conf/sql-client-init.sql:ro
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+      - ./conf/hadoop:/opt/hadoop/etc/hadoop:ro
+      - ./conf/hive/hive-site.xml:/opt/flink/conf/hive-site.xml:ro
+      - ./data/flink/catalog-store:/opt/flink/conf/catalog-store
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.4
+    mem_limit: 4g
+
+  flink-sql-client:
+    image: ${FLINK_IMAGE}
+    build:
+      context: .
+      dockerfile: build/flink/Dockerfile
+      args:
+        FLINK_BASE_IMAGE: ${FLINK_BASE_IMAGE}
+    container_name: flink-sql-client
+    hostname: flink-sql-client.lakehouse.com
+    entrypoint: ["/opt/flink/conf/sql-client-entrypoint.sh"]
+    command: ["sleep", "infinity"]
+    environment:
+      FLINK_CLASSPATH: /opt/flink/lib/extra/*
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      HADOOP_HOME: /opt/hadoop
+      FLINK_ENV_JAVA_OPTS: "-Djava.security.auth.login.config=/etc/security/flink-client-jaas.conf -Djavax.security.auth.useSubjectCredsOnly=false"
+    volumes:
+      - ./sql:/opt/flink/sql
+      - ./conf/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml:ro
+      - ./conf/flink/sql-client-defaults.yaml:/opt/flink/conf/sql-client-defaults.yaml:ro
+      - ./conf/flink/sql-client-init.sql:/opt/flink/conf/sql-client-init.sql:ro
+      - ./conf/flink/sql-client-entrypoint.sh:/opt/flink/conf/sql-client-entrypoint.sh:ro
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+      - ./conf/hadoop:/opt/hadoop/etc/hadoop:ro
+      - ./conf/hive/hive-site.xml:/opt/flink/conf/hive-site.xml:ro
+      - ./conf/kerberos/flink-client-jaas.conf:/etc/security/flink-client-jaas.conf:ro
+      - ./data/flink/catalog-store:/opt/flink/conf/catalog-store
+    depends_on:
+      - flink-jobmanager
+      - flink-taskmanager
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.5
+    mem_limit: 1g
+
+  doris-fe:
+    image: ${DORIS_FE_IMAGE}
+    container_name: doris-fe
+    entrypoint: ["/opt/apache-doris/conf/fe-start.sh"]
+    environment:
+      - FE_SERVERS=fe1:172.30.80.12:9010
+      - FE_ID=1
+      - JAVA_OPTS=-Xmx2048m -Xms2048m
+    ports:
+      - "8030:8030"
+      - "9030:9030"
+    volumes:
+      - ./data/doris/fe:/opt/apache-doris/fe/doris-meta
+      - ./conf/doris/fe-start.sh:/opt/apache-doris/conf/fe-start.sh:ro
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.12
+    mem_limit: 2g
+
+  doris-be:
+    image: ${DORIS_BE_IMAGE}
+    container_name: doris-be
+    environment:
+      - FE_SERVERS=fe1:172.30.80.12:9010
+      - BE_ADDR=172.30.80.14:9050
+    entrypoint: ["bash", "-c", "ulimit -n 655350 && exec bash entry_point.sh"]
+    depends_on:
+      - doris-fe
+    volumes:
+      - ./data/doris/be:/opt/apache-doris/be/storage
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.14
+    mem_limit: 3g
+
+  mysql:
+    image: ${MYSQL_IMAGE}
+    container_name: mysql
+    command:
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --server-id=1
+      - --log-bin=mysql-bin
+      - --expire-logs-days=7
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./data/mysql:/var/lib/mysql
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.21
+    mem_limit: 1g
+
+  spark-master:
+    image: ${SPARK_IMAGE}
+    build:
+      context: .
+      dockerfile: build/spark/Dockerfile
+      args:
+        SPARK_BASE_IMAGE: ${SPARK_BASE_IMAGE}
+    container_name: spark-master
+    hostname: spark-master.lakehouse.com
+    user: root
+    entrypoint: ["/opt/bitnami/spark/conf/spark-entrypoint.sh"]
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+      - HADOOP_HOME=/opt/hadoop
+      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+      - KRB5CCNAME=/tmp/krb5cc_spark
+      - JAVA_TOOL_OPTIONS=-Djava.security.krb5.conf=/etc/krb5.conf -Djava.security.krb5.ccache=/tmp/krb5cc_spark -Djavax.security.auth.useSubjectCredsOnly=false
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    volumes:
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
+      - ./conf/spark/spark-entrypoint.sh:/opt/bitnami/spark/conf/spark-entrypoint.sh:ro
+      - ./conf/hive/hive-site.xml:/opt/bitnami/spark/conf/hive-site.xml:ro
+      - ./conf/hadoop:/opt/hadoop/etc/hadoop:ro
+      - ./sql:/opt/spark/sql
+      - ./scripts:/opt/spark/scripts
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.31
+    mem_limit: 1g
+
+  spark-worker:
+    image: ${SPARK_IMAGE}
+    build:
+      context: .
+      dockerfile: build/spark/Dockerfile
+      args:
+        SPARK_BASE_IMAGE: ${SPARK_BASE_IMAGE}
+    container_name: spark-worker
+    hostname: spark-worker.lakehouse.com
+    user: root
+    entrypoint: ["/opt/bitnami/spark/conf/spark-entrypoint.sh"]
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_WEBUI_PORT=8081
+      - SPARK_WORKER_MEMORY=1024m
+      - HADOOP_HOME=/opt/hadoop
+      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+      - KRB5CCNAME=/tmp/krb5cc_spark
+      - JAVA_TOOL_OPTIONS=-Djava.security.krb5.conf=/etc/krb5.conf -Djava.security.krb5.ccache=/tmp/krb5cc_spark -Djavax.security.auth.useSubjectCredsOnly=false
+    depends_on:
+      - spark-master
+    ports:
+      - "8082:8081"
+    volumes:
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
+      - ./conf/spark/spark-entrypoint.sh:/opt/bitnami/spark/conf/spark-entrypoint.sh:ro
+      - ./conf/hive/hive-site.xml:/opt/bitnami/spark/conf/hive-site.xml:ro
+      - ./conf/hadoop:/opt/hadoop/etc/hadoop:ro
+      - ./sql:/opt/spark/sql
+      - ./scripts:/opt/spark/scripts
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.32
+    mem_limit: 1.5g
+
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    container_name: postgres
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "max_wal_senders=10"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      POSTGRES_DB: cdc_demo
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.22
+    mem_limit: 1g
+
+  mongodb:
+    image: ${MONGODB_IMAGE}
+    container_name: mongodb
+    hostname: mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: root123
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./data/mongodb:/data/db
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.23
+    mem_limit: 1g
+
+  trino:
+    image: ${TRINO_IMAGE}
+    container_name: trino
+    hostname: trino.lakehouse.com
+    ports:
+      - "8085:8080"
+    depends_on:
+      - namenode
+      - hive-metastore
+      - iceberg-rest
+    volumes:
+      - ./conf/trino:/etc/trino:ro
+      - ./conf/hadoop:/opt/hadoop/etc/hadoop:ro
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+      - ./data/trino:/data/trino
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.70
+    mem_limit: 4g
+
+  kerberos:
+    image: lakehouse-kdc:latest
+    build:
+      context: ./build/kerberos
+      dockerfile: Dockerfile
+    container_name: kerberos
+    environment:
+      - KRB5_REALM=LAKEHOUSE.COM
+      - KRB5_KDC=kerberos
+      - KRB5_ADMIN_PASSWORD=admin123
+    ports:
+      - "88:88"
+      - "749:749"
+    volumes:
+      - ./data/kerberos:/var/lib/krb5kdc
+      - ./conf/kerberos/keytabs:/etc/security/keytabs
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.60
+    mem_limit: 1g
+
+volumes: {}
+
+networks:
+  lakehouse-net:
+    name: lakehouse-net
+    ipam:
+      config:
+        - subnet: 172.30.80.0/24

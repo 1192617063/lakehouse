@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <property>
+    <name>yarn.resourcemanager.principal</name>
+    <value>hdfs/namenode.lakehouse.com@LAKEHOUSE.COM</value>
+  </property>
+</configuration>

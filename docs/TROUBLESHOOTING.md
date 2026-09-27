@@ -1,0 +1,625 @@
+# 湖仓环境部署问题与解决方案
+
+记录部署过程中遇到的各类问题、根因分析和解决方案。
+
+---
+
+## 一、Hudi + Flink 类加载冲突
+
+### 1.1 `ClassNotFoundException: org.apache.calcite.plan.RelOptRule`
+
+**现象：** Flink SQL Client 启动时或执行 Hudi 相关 SQL 时报错 `ClassNotFoundException: org.apache.calcite.plan.RelOptRule`。
+
+**根因：** `hive-exec-3.1.3.jar` 中的 `org.apache.hadoop.hive.ql.Hive.class` 引用了 `org.apache.calcite.plan.RelOptRule`，但 Calcite 相关类位于 Flink 的 `planner-loader` 子 classloader 中，父 classloader 不可见。Hive 的类由父 classloader 加载，导致找不到 Calcite 类。
+
+**解决方案：**
+1. 从 `hive-exec-3.1.3.jar` 中移除 `org/apache/hadoop/hive/ql/optimizer/calcite/` 包（Hive 的 Calcite 优化器，Flink 用不到）：
+```bash
+zip -d lib/flink/extra/hive-exec-3.1.3.jar 'org/apache/hadoop/hive/ql/optimizer/calcite/*'
+```
+2. 生成 `calcite-stub.jar`，包含最小化的桩类（`RelOptRule`、`HepProgram`、`HepProgramBuilder`、`RelOptHiveTable`、`HiveAugmentMaterializationRule`），仅满足类加载符号解析，不实际使用。生成脚本见 DEPLOYMENT_NOTES.md 第 3.4 节。
+
+### 1.2 `NoSuchMethodError: org.apache.parquet.schema.Types$PrimitiveBuilder.as()`
+
+**现象：** Hudi 读写 Parquet 文件时报 `NoSuchMethodError`。
+
+**根因：** `hive-exec-3.1.3.jar` 捆绑了旧版 Parquet 1.10.0，而 Hudi 1.0.2 依赖 Parquet 1.13.1。旧版类被优先加载导致方法不存在。
+
+**解决方案：** 从 `hive-exec-3.1.3.jar` 中移除 `org/apache/parquet/` 包：
+```bash
+zip -d lib/flink/extra/hive-exec-3.1.3.jar 'org/apache/parquet/*'
+```
+
+### 1.3 `Non-query expression encountered in illegal context`
+
+**现象：** 将完整 Calcite jar 放入父 classloader 后，Flink SQL 解析报错。
+
+**根因：** 完整 Calcite jar 同时存在于父和子 classloader，导致 `FlinkSqlParserImpl` 解析行为异常。
+
+**解决方案：** 不要将完整 Calcite 放入父 classloader，仅使用最小化的 `calcite-stub.jar`（只含桩类，不含实际实现）。
+
+### 1.4 `Multiple factories for identifier 'default'`
+
+**现象：** Flink planner 报错多个 default factory。
+
+**根因：** 将完整 `flink-table-planner-loader.jar` 同时复制到了父和子 classloader。
+
+**解决方案：** 不要复制完整 planner jar 到父 classloader，保持 planner 仅在子 classloader。
+
+---
+
+## 二、Hive + Hadoop 版本冲突
+
+### 2.1 Hive MR 任务 `NoClassDefFoundError: Updater`
+
+**现象：** Hive 执行 MR 作业时报 `NoClassDefFoundError`。
+
+**根因：** Hive 镜像内置 Tez 0.9.1 + Hadoop 2.7.0，与集群 HDFS 使用的 Hadoop 3.3.6 版本不兼容。
+
+**解决方案：**
+1. 用空目录覆盖镜像内置的 `/opt/tez`：
+```yaml
+volumes:
+  - ./lib/empty:/opt/tez:ro
+```
+2. 挂载 Hadoop 3.3.6 替代镜像自带的 3.1.0：
+```yaml
+volumes:
+  - ./lib/hadoop-3.3.6:/opt/hadoop:ro
+```
+
+### 2.2 Hive "No valid local directories in property: mapreduce.cluster.local.dir"
+
+**现象：** Hive 启动时报本地目录无效。
+
+**根因：** 缺少 `mapred-site.xml` 配置，默认本地目录不存在或无权限。
+
+**解决方案：** 创建 `conf/hadoop/mapred-site.xml`，配置 `mapreduce.cluster.local.dir` 指向容器内有效目录。
+
+### 2.3 "Can't get Master Kerberos principal for use as renewer"
+
+**现象：** Hive 访问安全 HDFS 报错找不到 RM Kerberos principal。
+
+**根因：** 缺少 `yarn-site.xml` 中 `yarn.resourcemanager.principal` 配置。
+
+**解决方案：** 创建 `conf/hadoop/yarn-site.xml`，配置 `yarn.resourcemanager.principal` 为 `rm/namenode.lakehouse.com@LAKEHOUSE.COM`。
+
+---
+
+## 三、Kerberos 认证问题
+
+### 3.1 Flink SQL Client 没有 Kerberos ticket
+
+**现象：** Flink SQL Client 访问 HDFS 报 `GSSException: No valid credentials provided`。
+
+**根因：** Flink 1.19 的 SQL Client 不会自动执行 `flink-conf.yaml` 中的 Kerberos 登录配置。
+
+**解决方案：** 在 `sql-client-entrypoint.sh` 中先执行 `kinit` 获取 ticket，并通过 `FLINK_ENV_JAVA_OPTS` 设置 JAAS 配置：
+```bash
+kinit -kt /etc/security/keytabs/flink.service.keytab flink/flink-jobmanager.lakehouse.com@LAKEHOUSE.COM
+export FLINK_ENV_JAVA_OPTS="-Djava.security.auth.login.config=/etc/security/flink-client-jaas.conf -Djavax.security.auth.useSubjectCredsOnly=false"
+```
+
+### 3.2 Kerberos keytab 在 KDC 重建后失效
+
+**现象：** 重建 KDC 数据库后，已有 keytab 无法认证，报 `Integrity check on decrypted field failed`。
+
+**根因：** KDC 重建后 master key 变化，旧 keytab 中的密钥与新数据库不匹配。
+
+**解决方案：** 删除旧 keytab 并重新通过 `kadmin.local ktadd` 生成：
+```bash
+rm -f conf/kerberos/keytabs/*.keytab
+docker compose restart kerberos
+sleep 15
+ls conf/kerberos/keytabs/
+```
+
+### 3.3 Keytab 文件不存在导致服务启动失败
+
+**现象：** HDFS/Hive/Kafka 等服务启动时报 `File not found: /etc/security/keytabs/xxx.service.keytab`。
+
+**根因：** Kerberos 容器未先启动，keytab 尚未生成；或 keytabs 目录未正确挂载。
+
+**解决方案：**
+1. 确保 `docker-compose.yaml` 中 kerberos 服务的 keytabs 挂载为可写（不加 `:ro`）：
+```yaml
+volumes:
+  - ./conf/kerberos/keytabs:/etc/security/keytabs
+```
+2. 先启动 kerberos 并等待 keytab 生成，再启动其他服务：
+```bash
+docker compose up -d kerberos
+sleep 15
+ls conf/kerberos/keytabs/  # 确认 keytab 已生成
+docker compose up -d
+```
+
+### 3.4 新增认证用户
+
+新增 Kerberos 用户需要在 **Kerberos KDC** 和 **Hadoop 授权** 两个层面操作。
+
+#### 操作清单
+
+| # | 改动位置 | 内容 | 生效方式 |
+|---|---|---|---|
+| 1 | KDC (kerberos 容器) | 创建 principal + 导出 keytab | 即时生效（keytab 写到 `conf/kerberos/keytabs/`） |
+| 2 | `conf/hadoop/core-site.xml` | `auth_to_local` 规则添加映射 | **需要重启 HDFS/Hive/Spark/Trino 等所有 Hadoop 客户端容器** |
+| 3 | (可选) `build/kerberos/kdc-init.sh` | 如果要让新用户在容器重建时也自动创建 | 重建 kerberos 镜像 + 清除 KDC 数据 |
+
+#### 步骤详解
+
+**第 1 步：在 KDC 中创建 principal 并导出 keytab**
+
+```bash
+# 启动 kerberos 容器
+docker compose up -d kerberos
+
+# 创建新 principal 并导出 keytab到共享目录
+docker exec kerberos bash -c '
+kadmin.local -q "addprinc -randkey newuser@LAKEHOUSE.COM"
+kadmin.local -q "ktadd -k /etc/security/keytabs/newuser.keytab newuser@LAKEHOUSE.COM"
+chmod 644 /etc/security/keytabs/newuser.keytab
+'
+
+# 验证 keytab
+docker exec kerberos klist -k /etc/security/keytabs/newuser.keytab
+
+# 确认宿主机上也能看到（因为 keytabs 目录是 volume 挂载的）
+ls -la conf/kerberos/keytabs/newuser.keytab
+```
+
+> **注意：** keytab 权限必须是 `644`，否则 Trino 等以非 root 用户运行的服务无法读取（见 10.4 节）。
+
+**第 2 步：在 core-site.xml 中添加 auth_to_local 映射**
+
+打开 `conf/hadoop/core-site.xml`，找到 `hadoop.security.auth_to_local` 属性，在 `DEFAULT` 之前添加一行：
+
+```xml
+<!-- 新增用户映射规则（放在 DEFAULT 之前） -->
+RULE:[1:$1@$0](newuser@.*)s/.*/newuser/
+```
+
+完整示例（只展示新增行）：
+
+```xml
+<property>
+  <name>hadoop.security.auth_to_local</name>
+  <value>
+    RULE:[2:$1@$0](nn@.*)s/.*/hdfs/
+    ...（已有规则）...
+    RULE:[1:$1@$0](lakehouse@.*)s/.*/lakehouse/
+    RULE:[1:$1@$0](newuser@.*)s/.*/newuser/   <!-- 新增这一行 -->
+    DEFAULT
+  </value>
+</property>
+```
+
+> **规则格式说明：**
+> - `RULE:[1:$1@$0]` 匹配单组件 principal（如 `newuser@LAKEHOUSE.COM`）
+> - `RULE:[2:$1@$0]` 匹配双组件 principal（如 `nn/namenode.lakehouse.com@LAKEHOUSE.COM`）
+> - `(newuser@.*)` 是正则，匹配 principal 名
+> - `s/.*/newuser/` 把匹配到的 principal 替换成 unix 用户名 `newuser`
+
+**第 3 步：重启所有 Hadoop 客户端容器**
+
+auth_to_local 规则在 Hadoop 客户端启动时加载，修改后需要重启：
+
+```bash
+# 需要重启的服务（全部依赖 Hadoop Kerberos 认证的）
+docker compose restart namenode datanode hive-metastore hive-server
+docker compose restart iceberg-rest trino
+docker compose restart spark-master spark-worker
+# Flink 也需要（如果在运行）
+docker compose restart flink-jobmanager flink-taskmanager
+```
+
+**第 4 步：验证**
+
+```bash
+# 用新 keytab kinit 测试
+docker exec namenode bash -c '
+kinit -kt /etc/security/keytabs/newuser.keytab newuser@LAKEHOUSE.COM
+klist
+hdfs dfs -mkdir -p /user/newuser
+hdfs dfs -ls /user/
+'
+```
+
+#### （可选）注册到 kdc-init.sh 实现自动化
+
+如果希望新用户在 KDC 完全重建时也自动创建，在 `build/kerberos/kdc-init.sh` 的末尾（`wait` 之前）添加：
+
+```bash
+kadmin.local -q "addprinc -randkey newuser@${REALM}" 2>/dev/null || true
+if [ ! -f "${KEYTAB_DIR}/newuser.keytab" ]; then
+    kadmin.local -q "ktadd -k ${KEYTAB_DIR}/newuser.keytab newuser@${REALM}" 2>/dev/null || true
+    chmod 644 "${KEYTAB_DIR}/newuser.keytab" 2>/dev/null || true
+fi
+```
+
+添加后需要重建 kerberos 镜像才能生效：
+
+```bash
+docker compose build kerberos
+# 下次 KDC 完全重建时自动创建
+```
+
+#### 常见问题
+
+| 问题 | 原因 | 解决 |
+|---|---|---|
+| `kinit: Principal unknown` | principal 名拼写错误，或 realm 不匹配 | 确认 principal 是 `newuser@LAKEHOUSE.COM`（realm 全大写） |
+| `UserGroupInformation: Unable to map user` | `core-site.xml` 缺少 `auth_to_local` 规则 | 按第 2 步添加映射，然后重启 HDFS |
+| `Permission denied` 读 keytab | keytab 权限是 600，容器内非 root 用户无法读 | `chmod 644 conf/kerberos/keytabs/newuser.keytab` |
+| KDC 重建后用户消失 | 新用户只在 KDC 数据库里手动创建，没注册到 kdc-init.sh | 按"注册到 kdc-init.sh"步骤添加 |
+
+---
+
+## 四、镜像与下载问题
+
+### 4.1 `kerberos/kerberos` 镜像不是 KDC
+
+**现象：** 使用 `kerberos/kerberos` 镜像后发现是视频监控软件，不是 Kerberos KDC。
+
+**根因：** Docker Hub 上 `kerberos/kerberos` 镜像名称冲突，实际是 Kerberos.io 视频监控项目。
+
+**解决方案：** 自行基于 `debian:bookworm-slim` 构建 KDC 镜像（见 DEPLOYMENT_NOTES.md 第 5.2 节）。
+
+### 4.2 `flink-shaded-hadoop3-uber` 下载版本错误
+
+**现象：** 下载 `flink-shaded-hadoop3-uber-3.7.0.jar` 后运行报类找不到。
+
+**根因：** 实际可用的 jar 名称是 `flink-shaded-hadoop3-uber-blink-3.7.0.jar`（带 `blink` 后缀）。
+
+**解决方案：** 使用正确的下载 URL：
+```bash
+wget https://repo1.maven.org/maven2/org/apache/flink/flink-shaded-hadoop3-uber-blink/3.7.0/flink-shaded-hadoop3-uber-blink-3.7.0.jar
+```
+
+---
+
+## 五、Doris 相关
+
+### 5.1 Doris FE 启动后 BE 无法注册
+
+**现象：** `SHOW BACKENDS` 中 BE 状态为 `false` 或不显示。
+
+**根因：** FE 与 BE 网络不通，或 `BE_ADDR` 配置错误。
+
+**解决方案：**
+1. 确认 `docker-compose.yaml` 中 `BE_ADDR=172.30.80.14:9050` 与 doris-be 的静态 IP 一致。
+2. 确认 FE_SERVERS 中 FE IP 正确：`fe1:172.30.80.12:9010`。
+3. BE 启动需要等待 FE 完全就绪，可手动重启 BE：
+```bash
+docker compose restart doris-be
+```
+
+### 5.2 Doris FE 首次启动需要创建 root 密码
+
+**现象：** FE 首次启动时无 root 密码，需初始化。
+
+**解决方案：** `conf/doris/fe-start.sh` 脚本中已处理：通过 `mysql` 连接 FE，若 root 无密码则设置密码，并创建 `lakehouse` 用户。
+
+---
+
+## 六、Kerberos 相关问题
+
+### 6.1 `kinit: Password incorrect` 或 `Cannot contact any KDC`
+
+**现象：** 服务启动后 namenode/datanode/hive 等容器退出，日志报 `kerberos` 认证失败，或 iceberg-rest 报 `kinit: Password incorrect`。
+
+**根因：** KDC 数据库重建后，磁盘上残留的旧 keytab 与新 KDC 数据库中的密钥不匹配。当清除 `data/kerberos/` 重启 kerberos 时，KDC 会用新随机密钥重建 principal，但 `conf/kerberos/keytabs/` 中的旧 keytab 文件未被覆盖（`ktadd` 会追加而非替换）。
+
+**解决方案：** 同时清除 KDC 数据和 keytab，让 kerberos 完全重新生成：
+```bash
+docker compose stop kerberos
+sudo rm -rf data/kerberos/*
+sudo rm -f conf/kerberos/keytabs/*.keytab
+docker compose up -d kerberos
+# 等待 keytab 生成后，重启所有依赖 kerberos 的服务
+docker compose up -d
+```
+
+### 6.2 NameNode 启动报 `NameNode is not formatted`
+
+**现象：** namenode 容器退出，日志报 `java.io.IOException: NameNode is not formatted`。
+
+**根因：** 首次部署时 HDFS 未格式化，或 `data/hadoop/namenode/` 目录被清空。
+
+**解决方案：**
+```bash
+docker compose run --rm namenode hdfs namenode -format -force
+docker compose start namenode
+```
+
+## 七、Hive Metastore 相关问题
+
+### 7.1 `Required table missing: "DBS"`
+
+**现象：** hive-metastore 容器退出，日志报 `Required table missing : "DBS"`。
+
+**根因：** MySQL 中 `hive_metastore` 数据库已创建但 Hive schema 未初始化。
+
+**解决方案：** 见 DEPLOYMENT_NOTES.md 第 9.3 节，使用显式 MySQL URL 运行 schematool。
+
+### 7.2 `Access denied for user 'hive'`
+
+**现象：** hive-metastore 日志报 `Access denied for user 'hive'@'...'`。
+
+**根因：** MySQL 中 hive 用户未创建或密码不匹配。
+
+**解决方案：** 见 DEPLOYMENT_NOTES.md 第 9.2 节创建 hive 用户。注意 hive-site.xml 中配置的数据库名是 `hive_metastore`（非 `metastore`）。
+
+## 八、PostgreSQL 相关问题
+
+### 8.1 `postgres does not know where to find the server configuration file`
+
+**现象：** postgres 容器退出，日志报 `You must specify the --config-file or -D invocation option or set the PGDATA environment variable`。
+
+**根因：** 使用了 `cloudnative-pg/postgresql` 镜像（专为 Kubernetes 设计），不兼容 docker-compose 中的 `command` 配置。
+
+**解决方案：** 改用标准 postgres 镜像：
+```bash
+# .env 中修改
+POSTGRES_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/postgres:16.4
+```
+> 注意：华为云 SWR 镜像源中 `postgres:16.4` 路径不带 `library/` 前缀。
+
+## 九、Doris BE 相关问题
+
+### 9.1 BE 无法注册到 FE（`register is failed`）
+
+**现象：** doris-be 容器日志反复输出 `register is failed, wait next~`，BE 进程未启动。
+
+**根因：** BE 的 entrypoint 通过 `mysql -uroot -P9030` 连接 FE 执行 `ALTER SYSTEM ADD BACKEND`，但连接被拒绝或注册失败。
+
+**解决方案：** 手动注册 BE：
+```bash
+# 确认 FE 的 root 用户可从 BE IP 访问
+docker exec doris-fe mysql -uroot -P9030 -h127.0.0.1 -e "ALTER SYSTEM ADD BACKEND '172.30.80.14:9050';"
+docker compose restart doris-be
+```
+
+### 9.2 FE 报 `no available BE nodes`
+
+**现象：** Doris FE 日志报 `System has no available disk capacity or no available BE nodes`。
+
+**根因：** BE 未成功注册或未启动，FE 没有可用的 BE 节点。
+
+**解决方案：** 先按 9.1 注册 BE，确认 `SHOW BACKENDS` 中 `Alive: true`。
+
+---
+
+## 十、Trino 相关问题
+
+### 10.1 华为云 SWR 镜像没有 `latest` 标签
+
+**现象：** `docker pull swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/trinodb/trino:latest` 报 `not found`。
+
+**根因：** 华为云 SWR 镜像仓库未同步 `latest` 标签，必须使用具体版本号。
+
+**解决方案：** 使用显式版本标签。已测试可用版本：482、480、479、477、476、472、466、465。推荐使用最新的 **482**：
+```
+TRINO_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/trinodb/trino:482
+```
+
+### 10.2 `Defunct property 'query.max-total-memory-per-node'`
+
+**现象：** Trino 启动报 `Defunct property 'query.max-total-memory-per-node'`，服务无法启动。
+
+**根因：** Trino 482 移除了 `query.max-total-memory-per-node` 属性。
+
+**解决方案：** 从 `config.properties` 中删除该属性，保留 `query.max-memory` 和 `query.max-memory-per-node` 即可。
+
+### 10.3 `hive.hdfs.*` 配置属性 `was not used`
+
+**现象：** Trino 启动报 `Configuration property 'hive.hdfs.authentication.type' was not used` 等多个 HDFS 相关属性未被使用。
+
+**根因：** Trino 460+ 重构了 HDFS 支持，默认不启用 HDFS 文件系统访问。未设置 `fs.hadoop.enabled=true` 时，所有 `hive.hdfs.*` 属性被忽略。
+
+**解决方案：** 在每个 catalog 配置文件中添加 `fs.hadoop.enabled=true`：
+```properties
+connector.name=hive
+fs.hadoop.enabled=true
+hive.config.resources=/opt/hadoop/etc/hadoop/core-site.xml,/opt/hadoop/etc/hadoop/hdfs-site.xml
+...
+```
+
+### 10.4 Keytab 文件不可读：`File is not readable`
+
+**现象：** Trino 启动报 `IllegalArgumentException: File is not readable: /etc/security/keytabs/trino.service.keytab`。
+
+**根因：** Trino 官方镜像以非 root 用户（UID 1000）运行，而 keytab 文件权限为 `600`（仅 root 可读）。
+
+**解决方案：** 将 keytab 权限改为 `644`：
+```bash
+sudo chmod 644 conf/kerberos/keytabs/trino.service.keytab
+```
+> `kdc-init.sh` 中的 `create_and_export()` 函数已包含 `chmod 644`，全新部署时自动正确设置权限。手动创建的 keytab 需手动修正。
+
+---
+
+## 十一、通用排查命令
+
+```bash
+# 查看所有容器状态
+docker compose ps
+
+# 查看某个容器日志
+docker logs -f <container_name>
+
+# 查看容器内进程
+docker exec <container_name> ps aux
+
+# 测试容器间网络连通
+docker exec -it namenode ping -c 2 datanode
+
+# 查看 Kerberos ticket
+docker exec namenode klist
+
+# 测试 keytab 是否有效
+docker exec namenode kinit -kt /etc/security/keytabs/nn.service.keytab nn/namenode.lakehouse.com@LAKEHOUSE.COM
+
+# 测试 HDFS 写入
+docker exec namenode bash -c '
+kinit -kt /etc/security/keytabs/nn.service.keytab nn/namenode.lakehouse.com@LAKEHOUSE.COM
+hdfs dfs -mkdir -p /test && hdfs dfs -rm -r /test
+'
+
+# 测试 Kafka（需 SASL，检查进程即可）
+docker exec kafka pgrep -f kafka.Kafka
+
+# 测试 Doris BE 状态
+docker exec doris-fe mysql -uroot -P9030 -h127.0.0.1 -e "SHOW BACKENDS\G"
+
+# 测试 Trino catalog
+docker exec trino trino --execute "SHOW CATALOGS;"
+```
+
+---
+
+## 十二、CDC 数据管道相关问题
+
+### 12.1 `ClassNotFoundException: ResolvedSchemaUtils`
+
+**现象：** 提交 MySQL CDC 作业时报 `ClassNotFoundException: org.apache.flink.cdc.common.utils.ResolvedSchemaUtils`。
+
+**根因：** 使用了瘦 jar `flink-connector-mysql-cdc-3.2.0.jar`（385K），缺少 `flink-cdc-common` 依赖。
+
+**解决方案：** 下载 fat jar `flink-sql-connector-mysql-cdc-3.2.0.jar`（21M）：
+```bash
+wget https://repo1.maven.org/maven2/com/ververica/flink-sql-connector-mysql-cdc/3.2.0/flink-sql-connector-mysql-cdc-3.2.0.jar
+# 同样替换 postgres-cdc
+wget https://repo1.maven.org/maven2/com/ververica/flink-sql-connector-postgres-cdc/3.2.0/flink-sql-connector-postgres-cdc-3.2.0.jar
+```
+
+### 12.2 Flink JobManager OOM (exit 137)
+
+**现象：** JobManager 容器频繁退出，exit code 137（OOM Killed）。
+
+**根因：** CDC fat jars + Debezium 引擎增加内存占用，默认 1GB 不够。同时运行 6 个流式作业消耗大量内存。
+
+**解决方案：**
+1. `conf/flink/flink-conf.yaml`:
+   ```yaml
+   jobmanager.memory.process.size: 4096m
+   ```
+2. `docker-compose.yaml` 中 flink-jobmanager:
+   ```yaml
+   mem_limit: 4g
+   ```
+
+### 12.3 Flink SQL Client 只执行第一个 `-f` 文件
+
+**现象：** `sql-client.sh -f init.sql -f pipeline.sql` 只执行了 init.sql。
+
+**根因：** Flink 1.19 SQL Client 只接受第一个 `-f` 参数。
+
+**解决方案：** 先用 `cat` 合并再执行：
+```bash
+cat init.sql pipeline.sql > /tmp/run.sql
+/opt/flink/bin/sql-client.sh -f /tmp/run.sql
+```
+
+### 12.4 `cdc_pipeline` 数据库不存在
+
+**现象：** 重新启动 SQL Client 后，`USE cdc_pipeline` 报数据库不存在。
+
+**根因：** `default_catalog` 中的数据库/表不持久化，每次会话需重新创建。
+
+**解决方案：** 每个 SQL 文件开头添加：
+```sql
+USE CATALOG default_catalog;
+CREATE DATABASE IF NOT EXISTS cdc_pipeline;
+USE cdc_pipeline;
+```
+
+### 12.5 PostgreSQL CDC `publication.name` 不支持
+
+**现象：** 配置 `publication.name` 选项时报错不支持。
+
+**解决方案：** 移除该选项，只保留 `slot.name` 和 `decoding.plugin.name`：
+```sql
+'slot.name' = 'flink_slot',
+'decoding.plugin.name' = 'pgoutput'
+```
+
+### 12.6 PostgreSQL `before` field is null
+
+**现象：** UPDATE/DELETE 操作的 before 字段为 null。
+
+**根因：** PostgreSQL 默认 REPLICA IDENTITY 只包含主键。
+
+**解决方案：**
+```sql
+ALTER TABLE public.users REPLICA IDENTITY FULL;
+```
+
+### 12.7 `flink cancel` 命令失败
+
+**现象：** `flink cancel <job_id>` 报错 `CancelOptions.<init>` 相关错误。
+
+**解决方案：** 使用 REST API 取消作业：
+```bash
+curl -s -X PATCH "http://localhost:8081/jobs/<job_id>?mode=cancel"
+```
+
+### 12.8 作业因 Task Slot 不足无法部署
+
+**现象：** 部分作业 RUNNING 但 Task 未启动，Kafka consumer group 无 active member。
+
+**根因：** `taskmanager.numberOfTaskSlots` 配置不足（默认 4），6 个作业需要 6 个 slot。
+
+**解决方案：** `conf/flink/flink-conf.yaml`:
+```yaml
+taskmanager.numberOfTaskSlots: 8
+```
+
+### 12.9 Hudi MOR 表数据不可查询
+
+**现象：** Hudi 表有 log 文件但 Trino 查询返回 0 行。
+
+**根因：** MERGE_ON_READ 表的数据在 delta log 文件中，需要 compaction 后才能通过 Trino 查询。
+
+**解决方案：** 改用 `COPY_ON_WRITE` 表类型（数据立即可查）：
+```sql
+'table.type' = 'COPY_ON_WRITE'
+```
+
+### 12.10 Hudi Checkpoint 失败（Checkpoint was declined）
+
+**现象：** Hudi 作业 FAILED，报 `Checkpoint was declined` 和 `HoodieUpsertException`。
+
+**根因：** Hudi 作业使用默认并行度（8），占用全部 Task Slot，导致 checkpoint 资源不足。
+
+**解决方案：** 在 Hudi SQL 中设置并行度为 1：
+```sql
+SET 'parallelism.default' = '1';
+```
+
+### 12.11 Paimon Writer 不写入数据
+
+**现象：** Paimon 作业 RUNNING，checkpoint 正常完成，Source 消费数据，但 HDFS 无数据文件。
+
+**根因：** Paimon Writer 接收到记录（read-records > 0）但不提交（write-records = 0），Global Committer 未将数据文件提交到 HDFS。具体原因待排查。
+
+**已尝试的配置（无效）：**
+- `changelog-producer = 'input'`
+- `write-buffer-size = '1mb'`
+- `commit.force.delay = '5s'`
+- `execution.checkpointing.interval = '10s'`
+
+**临时方案：** 使用 Iceberg 或 Hudi 替代 Paimon 进行湖仓写入验证。
+
+### 12.12 CDC 数据管道提交前必须 kinit
+
+**现象：** 提交作业时报 `GSSException: No valid credentials provided`。
+
+**根因：** JobManager 容器重启后 Kerberos ticket 丢失。
+
+**解决方案：** 每次提交作业前执行：
+```bash
+docker exec flink-jobmanager bash -c '
+kinit -kt /etc/security/keytabs/flink.service.keytab flink/flink-jobmanager.lakehouse.com@LAKEHOUSE.COM
+'
+```

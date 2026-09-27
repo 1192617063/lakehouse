@@ -1,0 +1,5 @@
+execution:
+  planner: blink
+  type: streaming
+  parallelism: 4
+  result-mode: tableau

@@ -1,0 +1,31 @@
+# === Docker 运行时数据 ===
+data/
+
+# === 预打包二进制（体积大，镜像里已有） ===
+lib/
+
+# === Git ===
+.git/
+
+# === IDE ===
+.idea/
+.vscode/
+*.iml
+.settings/
+.project
+.classpath
+
+# === 系统 ===
+.DS_Store
+Thumbs.db
+*~
+
+# === Docker build cache ===
+.cache/
+
+# === 日志 ===
+*.log
+logs/
+
+# === Kerberos keytabs（凭据，永不入库）===
+conf/kerberos/keytabs/

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <property>
+    <name>mapreduce.framework.name</name>
+    <value>local</value>
+  </property>
+  <property>
+    <name>mapreduce.cluster.local.dir</name>
+    <value>/tmp/mapred/local</value>
+  </property>
+  <property>
+    <name>mapreduce.job.kerberos.principal</name>
+    <value>hive</value>
+  </property>
+</configuration>
