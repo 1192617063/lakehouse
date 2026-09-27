@@ -25,14 +25,7 @@
   </property>
   <property>
     <name>hadoop.security.auth_to_local</name>
-    <value>RULE:[2:$1@$0](nn@.*)s/.*/hdfs/
-RULE:[2:$1@$0](dn@.*)s/.*/hdfs/
-RULE:[2:$1@$0](yarn@.*)s/.*/yarn/
-RULE:[2:$1@$0](hive@.*)s/.*/hive/
-RULE:[2:$1@$0](flink@.*)s/.*/flink/
-RULE:[2:$1@$0](spark@.*)s/.*/spark/
-RULE:[2:$1@$0](kafka@.*)s/.*/kafka/
-RULE:[1:$1@$0](lakehouse@.*)s/.*/lakehouse/
+    <value>RULE:[2:$1@$0](.*@.*)s/.*/hadoop/
 DEFAULT</value>
   </property>
 

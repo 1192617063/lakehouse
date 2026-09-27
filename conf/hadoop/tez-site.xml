@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <!-- Tez 分发包：YARN 容器启动时从 HDFS 拉取 -->
+  <property>
+    <name>tez.lib.uris</name>
+    <value>hdfs://namenode:9000/user/tez/tez.tar.gz</value>
+  </property>
+  <!-- 本地 tez 安装目录（client 用）-->
+  <property>
+    <name>tez.lib.dir</name>
+    <value>/opt/tez</value>
+  </property>
+
+  <!-- === Kerberos === -->
+  <property>
+    <name>tez.kerberos.principal</name>
+    <value>lakehouse@LAKEHOUSE.COM</value>
+  </property>
+
+  <!-- === Tez 任务临时目录 === -->
+  <property>
+    <name>tez.am.container.reuse.enabled</name>
+    <value>true</value>
+  </property>
+  <property>
+    <name>tez.am.java.opts</name>
+    <value>-server -Xmx-200m -Djava.net.preferIPv4Stack=true</value>
+  </property>
+
+  <!-- === DAG Scheduler === -->
+  <property>
+    <name>tez.am.container.idle.release-timeout-ms</name>
+    <value>5000</value>
+  </property>
+
+  <!-- === 资源 === -->
+  <property>
+    <name>tez.grouping.min-size</name>
+    <value>134217728</value>
+  </property>
+  <property>
+    <name>tez.grouping.max-size</name>
+    <value>1073741824</value>
+  </property>
+  <property>
+    <name>tez.grouping.split-waves</name>
+    <value>1.7</value>
+  </property>
+</configuration>

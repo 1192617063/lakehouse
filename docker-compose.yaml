@@ -55,7 +55,6 @@ services:
       - ./conf/hadoop:/opt/hadoop/etc/hadoop
       - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
       - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
-    mem_limit: 1g
 
   yarn-node-manager:
     image: ${HADOOP_IMAGE}
@@ -76,7 +75,6 @@ services:
       - ./data/yarn/nm-logs:/data/yarn/nm-logs
       - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
       - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
-    mem_limit: 1.5g
 
   hive-metastore:
     image: ${HIVE_IMAGE}
@@ -93,13 +91,13 @@ services:
         ipv4_address: 172.30.80.43
     volumes:
       - ./lib/mysql/mysql-connector-j-8.4.0.jar:/opt/hive/lib/mysql-connector-j-8.4.0.jar:ro
-      - ./lib/empty:/opt/tez:ro
       - ./lib/hadoop-3.3.6:/opt/hadoop:ro
       - ./conf/hive:/opt/hive/custom-conf:ro
       - ./conf/hadoop/core-site.xml:/opt/hive/conf/core-site.xml:ro
       - ./conf/hadoop/hdfs-site.xml:/opt/hive/conf/hdfs-site.xml:ro
       - ./conf/hadoop/yarn-site.xml:/opt/hive/conf/yarn-site.xml:ro
       - ./conf/hadoop/mapred-site.xml:/opt/hive/conf/mapred-site.xml:ro
+      - ./conf/hadoop/tez-site.xml:/opt/hive/conf/tez-site.xml:ro
       - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
       - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
     mem_limit: 1g
@@ -113,16 +111,16 @@ services:
       IS_RESUME: "true"
       HIVE_CUSTOM_CONF_DIR: /opt/hive/custom-conf
     ports: ["21066:21066", "21067:21067"]
-    depends_on: [hive-metastore]
+    depends_on: [hive-metastore, yarn-resource-manager]
     volumes:
       - ./lib/mysql/mysql-connector-j-8.4.0.jar:/opt/hive/lib/mysql-connector-j-8.4.0.jar:ro
-      - ./lib/empty:/opt/tez:ro
       - ./lib/hadoop-3.3.6:/opt/hadoop:ro
       - ./conf/hive:/opt/hive/custom-conf:ro
       - ./conf/hadoop/core-site.xml:/opt/hive/conf/core-site.xml:ro
       - ./conf/hadoop/hdfs-site.xml:/opt/hive/conf/hdfs-site.xml:ro
       - ./conf/hadoop/yarn-site.xml:/opt/hive/conf/yarn-site.xml:ro
       - ./conf/hadoop/mapred-site.xml:/opt/hive/conf/mapred-site.xml:ro
+      - ./conf/hadoop/tez-site.xml:/opt/hive/conf/tez-site.xml:ro
       - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
       - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
     networks:
