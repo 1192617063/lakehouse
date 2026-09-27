@@ -97,7 +97,7 @@ services:
       - ./conf/hadoop/hdfs-site.xml:/opt/hive/conf/hdfs-site.xml:ro
       - ./conf/hadoop/yarn-site.xml:/opt/hive/conf/yarn-site.xml:ro
       - ./conf/hadoop/mapred-site.xml:/opt/hive/conf/mapred-site.xml:ro
-      - ./conf/hadoop/tez-site.xml:/opt/hive/conf/tez-site.xml:ro
+      # - ./conf/hadoop/tez-site.xml:/opt/hive/conf/tez-site.xml:ro  # 暂时注释排查
       - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
       - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
     mem_limit: 1g
@@ -110,23 +110,27 @@ services:
       SERVICE_NAME: hiveserver2
       IS_RESUME: "true"
       HIVE_CUSTOM_CONF_DIR: /opt/hive/custom-conf
+      # 关键！override TEZ_HOME 让 entrypoint.sh 里的 $TEZ_HOME/* glob 不匹配
+      # HiveServer2 不需要 tez jar 在 classpath 里——tez 通过 tez.lib.uris 在 YARN 容器加载
+      TEZ_HOME: /dev/null
     ports: ["21066:21066", "21067:21067"]
     depends_on: [hive-metastore, yarn-resource-manager]
     volumes:
       - ./lib/mysql/mysql-connector-j-8.4.0.jar:/opt/hive/lib/mysql-connector-j-8.4.0.jar:ro
       - ./lib/hadoop-3.3.6:/opt/hadoop:ro
+      # - ./lib/tez:/opt/tez:ro  # 暂时注释排查
       - ./conf/hive:/opt/hive/custom-conf:ro
       - ./conf/hadoop/core-site.xml:/opt/hive/conf/core-site.xml:ro
       - ./conf/hadoop/hdfs-site.xml:/opt/hive/conf/hdfs-site.xml:ro
       - ./conf/hadoop/yarn-site.xml:/opt/hive/conf/yarn-site.xml:ro
       - ./conf/hadoop/mapred-site.xml:/opt/hive/conf/mapred-site.xml:ro
-      - ./conf/hadoop/tez-site.xml:/opt/hive/conf/tez-site.xml:ro
+      # - ./conf/hadoop/tez-site.xml:/opt/hive/conf/tez-site.xml:ro  # 暂时注释排查
       - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
       - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
     networks:
       lakehouse-net:
         ipv4_address: 172.30.80.44
-    mem_limit: 1g
+    mem_limit: 2g
 
   iceberg-rest:
     image: lakehouse-iceberg-rest:1.10.1
