@@ -691,7 +691,7 @@ TRANSFERSQL
 ### 4.6 MongoDB 支持
 
 MongoDB 需要额外的连接器 jar（`mongo-spark-connector` + Java 驱动）。
-**jar 下载命令统一放在 [DEPLOYMENT_NOTES.md](./DEPLOYMENT_NOTES.md)** 的 Spark jar 下载小节，
+**jar 下载命令统一放在 [APPENDIX_DEPLOYMENT_NOTES.md](./APPENDIX_DEPLOYMENT_NOTES.md)** 的 Spark jar 下载小节，
 下载后需重建 Spark 镜像（jar 已 COPY 进镜像）。
 
 > **注意**：`mongo-spark-connector 10.x` 的配置项使用 `spark.mongodb.read.connection.uri` / `spark.mongodb.read.database` / `spark.mongodb.read.collection`，
@@ -946,7 +946,7 @@ docker exec spark-master bash -c '
 | MongoDB | `mongo-spark-connector_2.12-10.4.0.jar` + `bson-5.2.0.jar` + `mongodb-driver-core-5.2.0.jar` + `mongodb-driver-sync-5.2.0.jar` |
 
 **已知限制**：
-- `local[*]` 模式验证通过，standalone 集群模式存在 executor Kerberos 认证问题（详见 SPARK_OFFLINE_LAKEHOUSE.md）
+- `local[*]` 模式验证通过，standalone 集群模式存在 executor Kerberos 认证问题（详见 APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md）
 
 ---
 
@@ -1075,5 +1075,5 @@ echo "湖仓行数:"
 
 ## 附录：相关文档
 
-- [SPARK_OFFLINE_LAKEHOUSE.md](./SPARK_OFFLINE_LAKEHOUSE.md) — Spark 离线作业与湖仓一体
-- [DEPLOYMENT_NOTES.md](./DEPLOYMENT_NOTES.md) — 部署笔记
+- [APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md](./APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md) — Spark 离线作业与湖仓一体
+- [APPENDIX_DEPLOYMENT_NOTES.md](./APPENDIX_DEPLOYMENT_NOTES.md) — 部署笔记

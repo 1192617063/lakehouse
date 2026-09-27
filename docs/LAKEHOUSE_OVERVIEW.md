@@ -206,12 +206,12 @@ klist  # 查看 ticket
 
 | 专题 | 文件 | 内容 |
 |------|------|------|
-| **从零部署指南** | [DEPLOYMENT_NOTES.md](DEPLOYMENT_NOTES.md) | 全新环境 docker compose 部署流程 |
-| **部署故障排查** | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 13-18 节 Kerberos 相关坑点全集 |
-| **DBeaver 连接指南** | [DBEAVER_CONNECTION_GUIDE.md](DBEAVER_CONNECTION_GUIDE.md) | Windows DBeaver → HiveServer2 Kerberos 连接 |
-| **CDC 实时数据管道** | [CDC_PIPELINE.md](CDC_PIPELINE.md) | MySQL/PG → Flink CDC → Kafka → Iceberg/Hudi/Paimon |
-| **Spark 离线湖仓一体** | [SPARK_OFFLINE_LAKEHOUSE.md](SPARK_OFFLINE_LAKEHOUSE.md) | Spark on YARN Kerberos + delegation token + 批量导出 |
-| **生产数据操作** | [PRODUCTION_DATA_OPS.md](PRODUCTION_DATA_OPS.md) | 存量导入、积压处理、HFile BulkLoad |
+| **从零部署指南** | [APPENDIX_DEPLOYMENT_NOTES.md](APPENDIX_DEPLOYMENT_NOTES.md) | 全新环境 docker compose 部署流程 |
+| **部署故障排查** | [APPENDIX_TROUBLESHOOTING.md](APPENDIX_TROUBLESHOOTING.md) | 13-18 节 Kerberos 相关坑点全集 |
+| **DBeaver 连接指南** | [APPENDIX_DBEAVER_CONNECTION_GUIDE.md](APPENDIX_DBEAVER_CONNECTION_GUIDE.md) | Windows DBeaver → HiveServer2 Kerberos 连接 |
+| **CDC 实时数据管道** | [APPENDIX_CDC_PIPELINE.md](APPENDIX_CDC_PIPELINE.md) | MySQL/PG → Flink CDC → Kafka → Iceberg/Hudi/Paimon |
+| **Spark 离线湖仓一体** | [APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md](APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md) | Spark on YARN Kerberos + delegation token + 批量导出 |
+| **生产数据操作** | [APPENDIX_PRODUCTION_DATA_OPS.md](APPENDIX_PRODUCTION_DATA_OPS.md) | 存量导入、积压处理、HFile BulkLoad |
 | **MongoDB→HBase 迁移** | [LEARNING_ROADMAP.md#-case-study-bmongodb--hbase-存量迁移](LEARNING_ROADMAP.md) | Roadmap 高级 Case Study B（已合并） |
 | **存量迁移与集群规划** | [LEARNING_ROADMAP.md#-case-study-a存量迁移五步法--数仓分层设计](LEARNING_ROADMAP.md) | Roadmap 高级 Case Study A：五步法 + 选型决策树 + 架构图 + Kerberos 矩阵 |
 | **Kerberos Principal 清单** | [KERBEROS_PRINCIPALS.md](KERBEROS_PRINCIPALS.md) | 所有 principal + 用途 + 管理命令 |

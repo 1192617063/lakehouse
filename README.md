@@ -205,13 +205,13 @@ Release 包包含：
 | [总览笔记](docs/LAKEHOUSE_OVERVIEW.md) | ⭐ 平台架构、组件表、快速上手（**先读这个**） |
 | [**Learning Roadmap（初→资深完整路径）**](docs/LEARNING_ROADMAP.md) | ⭐ **单一知识地图**：三阶段 12 案例 + 存量迁移方法论 + MongoDB→HBase 实施 + 数仓分层 + Kerberos 认证矩阵 |
 | [Kerberos 清单](docs/KERBEROS_PRINCIPALS.md) | 所有 principal + 管理命令 + 新增组件 Checklist |
-| [**Auth 切换（Kerberos ↔ SIMPLE）**](docs/AUTH_SWITCH.md) | ⭐ **双向完整指南**：一键脚本 + HBase 3 层改动详解 + 7 个已知坑点 |
-| [CDC 管道（深度代码）](docs/CDC_PIPELINE.md) | MySQL/PG → Flink CDC → Kafka → Iceberg/Hudi/Paimon（完整 DDL + Kafka topic 设计） |
-| [Spark 离线湖仓（深度）](docs/SPARK_OFFLINE_LAKEHOUSE.md) | Spark on YARN Kerberos + delegation token + 离线/实时一套表结构方法论 |
-| [DBeaver 连接](docs/DBEAVER_CONNECTION_GUIDE.md) | Windows DBeaver Kerberos 连 HiveServer2 |
-| [部署指南](docs/DEPLOYMENT_NOTES.md) | 全新环境从零部署步骤 |
-| [故障排查](docs/TROUBLESHOOTING.md) | 所有 Kerberos 坑点 + 解决方案 |
-| [生产操作](docs/PRODUCTION_DATA_OPS.md) | 存量导入、积压处理、HFile BulkLoad |
+| [**Auth 切换（Kerberos ↔ SIMPLE）**](docs/APPENDIX_AUTH_SWITCH.md) | ⭐ **双向完整指南**：一键脚本 + HBase 3 层改动详解 + 7 个已知坑点 |
+| [CDC 管道（深度代码）](docs/APPENDIX_CDC_PIPELINE.md) | MySQL/PG → Flink CDC → Kafka → Iceberg/Hudi/Paimon（完整 DDL + Kafka topic 设计） |
+| [Spark 离线湖仓（深度）](docs/APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md) | Spark on YARN Kerberos + delegation token + 离线/实时一套表结构方法论 |
+| [DBeaver 连接](docs/APPENDIX_DBEAVER_CONNECTION_GUIDE.md) | Windows DBeaver Kerberos 连 HiveServer2 |
+| [部署指南](docs/APPENDIX_DEPLOYMENT_NOTES.md) | 全新环境从零部署步骤 |
+| [故障排查](docs/APPENDIX_TROUBLESHOOTING.md) | 所有 Kerberos 坑点 + 解决方案 |
+| [生产操作](docs/APPENDIX_PRODUCTION_DATA_OPS.md) | 存量导入、积压处理、HFile BulkLoad |
 
 ### 一键脚本
 

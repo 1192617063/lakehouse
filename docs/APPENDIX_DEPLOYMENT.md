@@ -2088,6 +2088,6 @@ kadmin.local -q "ktadd -k /etc/security/keytabs/hive.service.keytab hive/hivemet
 - keytab 文件：`testuser.keytab` → `lakehouse.keytab`
 - Hadoop `auth_to_local` 规则：`testuser` → `lakehouse`
 - `build/kerberos/kdc-init.sh`：principal 创建改用 `addprinc -randkey`（随机密钥，更安全），并 `chmod 644`
-- 所有文档（DEPLOYMENT_NOTES.md、DBEAVER_CONNECTION_GUIDE.md、SPARK_OFFLINE_LAKEHOUSE.md）同步更新
+- 所有文档（APPENDIX_DEPLOYMENT_NOTES.md、APPENDIX_DBEAVER_CONNECTION_GUIDE.md、APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md）同步更新
 
 **影响**：Kerberos 数据库已重建，所有 keytab 重新生成。`lakehouse.keytab` 已验证可正常 kinit 并读写 HDFS。

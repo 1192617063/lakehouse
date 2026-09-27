@@ -431,7 +431,7 @@ docker exec spark-master bash -c '
 ## 八、关键配置说明
 
 > Spark 的部署配置（Dockerfile、spark-defaults.conf、docker-compose volumes 等）统一放在
-> [DEPLOYMENT_NOTES.md](./DEPLOYMENT_NOTES.md) 第 4.7 节，本文档不再重复。
+> [APPENDIX_DEPLOYMENT_NOTES.md](./APPENDIX_DEPLOYMENT_NOTES.md) 第 4.7 节，本文档不再重复。
 
 本节仅说明与"离线/实时共用一套表"相关的 Catalog 架构：
 

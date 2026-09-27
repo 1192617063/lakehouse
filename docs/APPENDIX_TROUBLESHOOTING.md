@@ -17,7 +17,7 @@
 ```bash
 zip -d lib/flink/extra/hive-exec-3.1.3.jar 'org/apache/hadoop/hive/ql/optimizer/calcite/*'
 ```
-2. 生成 `calcite-stub.jar`，包含最小化的桩类（`RelOptRule`、`HepProgram`、`HepProgramBuilder`、`RelOptHiveTable`、`HiveAugmentMaterializationRule`），仅满足类加载符号解析，不实际使用。生成脚本见 DEPLOYMENT_NOTES.md 第 3.4 节。
+2. 生成 `calcite-stub.jar`，包含最小化的桩类（`RelOptRule`、`HepProgram`、`HepProgramBuilder`、`RelOptHiveTable`、`HiveAugmentMaterializationRule`），仅满足类加载符号解析，不实际使用。生成脚本见 APPENDIX_DEPLOYMENT_NOTES.md 第 3.4 节。
 
 ### 1.2 `NoSuchMethodError: org.apache.parquet.schema.Types$PrimitiveBuilder.as()`
 
@@ -263,7 +263,7 @@ docker compose build kerberos
 
 **根因：** Docker Hub 上 `kerberos/kerberos` 镜像名称冲突，实际是 Kerberos.io 视频监控项目。
 
-**解决方案：** 自行基于 `debian:bookworm-slim` 构建 KDC 镜像（见 DEPLOYMENT_NOTES.md 第 5.2 节）。
+**解决方案：** 自行基于 `debian:bookworm-slim` 构建 KDC 镜像（见 APPENDIX_DEPLOYMENT_NOTES.md 第 5.2 节）。
 
 ### 4.2 `flink-shaded-hadoop3-uber` 下载版本错误
 
@@ -340,7 +340,7 @@ docker compose start namenode
 
 **根因：** MySQL 中 `hive_metastore` 数据库已创建但 Hive schema 未初始化。
 
-**解决方案：** 见 DEPLOYMENT_NOTES.md 第 9.3 节，使用显式 MySQL URL 运行 schematool。
+**解决方案：** 见 APPENDIX_DEPLOYMENT_NOTES.md 第 9.3 节，使用显式 MySQL URL 运行 schematool。
 
 ### 7.2 `Access denied for user 'hive'`
 
@@ -348,7 +348,7 @@ docker compose start namenode
 
 **根因：** MySQL 中 hive 用户未创建或密码不匹配。
 
-**解决方案：** 见 DEPLOYMENT_NOTES.md 第 9.2 节创建 hive 用户。注意 hive-site.xml 中配置的数据库名是 `hive_metastore`（非 `metastore`）。
+**解决方案：** 见 APPENDIX_DEPLOYMENT_NOTES.md 第 9.2 节创建 hive 用户。注意 hive-site.xml 中配置的数据库名是 `hive_metastore`（非 `metastore`）。
 
 ## 八、PostgreSQL 相关问题
 
@@ -648,7 +648,7 @@ kinit -kt /etc/security/keytabs/flink.service.keytab flink/flink-jobmanager.lake
 
 **根因**：JDBC URL 里的 host 是 **IP**（`172.24.64.215`），不是 hostname。GSSAPI 用 IP 构建 service principal `hive/172.24.64.215@LAKEHOUSE.COM` → KDC 找不到。
 
-**解决方案**：JDBC URL 必须用 hostname（见 DBEAVER_CONNECTION_GUIDE.md 第 4.4 节）：
+**解决方案**：JDBC URL 必须用 hostname（见 APPENDIX_DBEAVER_CONNECTION_GUIDE.md 第 4.4 节）：
 ```
 jdbc:hive2://hiveserver.lakehouse.com:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM
 ```
@@ -858,4 +858,4 @@ docker exec kerberos kadmin -p admin/admin -w admin123 -q 'listprincs'
 
 ### 18.3 创建新用户 + keytab（自动化）
 
-见 TROUBLESHOOTING.md 第 3.4 节（新增认证用户）。
+见 APPENDIX_TROUBLESHOOTING.md 第 3.4 节（新增认证用户）。

@@ -171,7 +171,85 @@ docker compose up -d
 
 ---
 
-## 四、新增组件 Checklist
+## 四、新增用户 Step-by-Step（已有一键脚本 `add-user.sh`）
+
+### 方式 1：一键脚本（推荐）
+
+```bash
+# 普通用户 principal (user@REALM)
+./scripts/add-user.sh alice Alice123
+
+# 服务 principal (service/fqdn@REALM)
+./scripts/add-user.sh --service flink-jobmanager --host flinkjobmanager.lakehouse.com
+
+# 随机密码（自动生成）
+./scripts/add-user.sh bob
+# 输出: 📝 随机生成密码: Kx9mPq2vRt4w...（只显示这一次！）
+```
+
+脚本自动做的事：
+1. ✅ KDC 容器存在性检查
+2. ✅ 在 KDC 里 `addprinc`（用户给密码 / 服务用 `-randkey`）
+3. ✅ 导出 keytab 到 `conf/kerberos/keytabs/<name>.keytab`
+4. ✅ 在 KDC 容器内 kinit + klist 验证 keytab 可用
+5. ✅ 幂等：principal 已存在则跳过 `addprinc`，只刷新 keytab
+
+### 方式 2：手动（理解原理）
+
+```bash
+# ① 进 KDC 容器用 kadmin（跨网络 admin/admin 凭证）
+docker exec kerberos kadmin -p admin/admin -w admin123
+
+# ② 新增用户 principal（有密码）
+kadmin: addprinc -pw MyP@ssw0rd alice@LAKEHOUSE.COM
+
+# ③ 或服务 principal（无密码，-randkey 生成随机 key）
+kadmin: addprinc -randkey demoapp/demoapp.lakehouse.com@LAKEHOUSE.COM
+
+# ④ 导出 keytab
+kadmin: ktadd -k /etc/security/keytabs/alice.keytab alice@LAKEHOUSE.COM
+
+# ⑤ 拷到宿主机（如果 KDC 没 volume 挂载 keytabs 目录）
+docker cp kerberos:/etc/security/keytabs/alice.keytab conf/kerberos/keytabs/
+
+# ⑥ 验证
+docker exec kerberos kinit -kt /etc/security/keytabs/alice.keytab alice@LAKEHOUSE.COM
+docker exec kerberos klist
+# 预期输出: Default principal: alice@LAKEHOUSE.COM
+```
+
+### ⑦ 重要：auth_to_local 映射（HBase / Hadoop 必需）
+
+Hadoop / HBase 收到 Kerberos principal 时要映射到 Unix 用户名，否则会报 `PermissionDenied user=alice is not owner of inode=/hbase`。
+
+修改 `conf/hadoop/core-site.xml`：
+
+```xml
+<property>
+  <name>hadoop.security.auth_to_local</name>
+  <value>
+    <!-- 在 RULE 里加一条，把 alice@REALM 映射成 alice -->
+    RULE:[2:$1](alice)s/.*/alice/
+    RULE:[2:$1](bob)s/.*/bob/
+    DEFAULT
+  </value>
+</property>
+```
+
+改完重启 HBase Master：`docker compose restart hbase-master`
+
+### ⑧ 进 kdc-init.sh 固化（让下次重建 KDC 也带这个用户）
+
+在 `build/kerberos/kdc-init.sh` 的 "用户 principal" 段加：
+
+```bash
+kadmin.local -q "addprinc -randkey alice@${REALM}" 2>/dev/null || true
+kadmin.local -q "ktadd -k ${KEYTAB_DIR}/alice.keytab alice@${REALM}" 2>/dev/null || true
+```
+
+---
+
+## 五、新增组件 Checklist
 
 每新增一个需要 Kerberos 认证的组件，**必须**做以下修改：
 

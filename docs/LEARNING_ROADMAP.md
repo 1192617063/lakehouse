@@ -41,7 +41,7 @@
 
 **验证**：输出末尾 `✅ 全栈 auth 一致：KERBEROS` + `21/22 Up` = 通过。
 
-> 📖 完整 auth 切换操作 + 7 个坑点：[docs/AUTH_SWITCH.md](AUTH_SWITCH.md)
+> 📖 完整 auth 切换操作 + 7 个坑点：[docs/APPENDIX_AUTH_SWITCH.md](APPENDIX_AUTH_SWITCH.md)
 
 ---
 
@@ -165,7 +165,7 @@ SPARK
 
 完整代码 + MySQL binlog 配置 + Flink SQL DDL + Kafka upsert topic + Iceberg Sink 配置 + Exactly-once 故障恢复：
 
-👉 **[docs/CDC_PIPELINE.md](CDC_PIPELINE.md)**
+👉 **[docs/APPENDIX_CDC_PIPELINE.md](APPENDIX_CDC_PIPELINE.md)**
 
 ### 最小跑通清单（速查）
 
@@ -176,7 +176,7 @@ CREATE DATABASE IF NOT EXISTS shop; USE shop;
 CREATE TABLE products (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(100), price DECIMAL(10,2), stock INT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP);
 INSERT INTO shop.products (name, price, stock) VALUES ('iPhone-16', 6999.00, 120), ('MacBook-M4', 14999.00, 45);"
 
-# 2. Flink CDC DDL 起管道（完整 DDL 在 CDC_PIPELINE.md 里）
+# 2. Flink CDC DDL 起管道（完整 DDL 在 APPENDIX_CDC_PIPELINE.md 里）
 docker exec flink-sql-client   # 粘贴 DDL 代码
 
 # 3. MySQL 造变更 → Trino 查 Iceberg
@@ -227,7 +227,7 @@ docker exec trino trino --execute "SELECT * FROM hive.default.t_evolve"
 
 完整 Spark Shell 代码 + 预分区 SPLITS 策略 + RowKey 热点规避 + Region 对齐检查：
 
-👉 **[docs/PRODUCTION_DATA_OPS.md](PRODUCTION_DATA_OPS.md)**
+👉 **[docs/APPENDIX_PRODUCTION_DATA_OPS.md](APPENDIX_PRODUCTION_DATA_OPS.md)**
 
 ### 核心原理（一句话）
 
@@ -266,7 +266,7 @@ WHERE o.status = 'paid';
 
 1. ✅ CDC 管道秒级同步 MySQL → Iceberg
 2. ✅ Spark SQL ALTER TABLE ADD COLUMNS + Trino 实时可见
-3. ✅ HBase BulkLoad 百万级数据（参考 PRODUCTION_DATA_OPS.md）
+3. ✅ HBase BulkLoad 百万级数据（参考 APPENDIX_PRODUCTION_DATA_OPS.md）
 4. ✅ Trino 跨 ≥2 catalogs JOIN
 
 ---
@@ -657,7 +657,7 @@ lag_g     lag_demo  0          5000            100000          95000
 ```
 
 > 📖 **完整 Kafka 积压排查清单**（Flink Checkpoint lag、Spark Structured Streaming lag、常见 root cause）：
-> **[docs/PRODUCTION_DATA_OPS.md](PRODUCTION_DATA_OPS.md)** —— 第 3 章
+> **[docs/APPENDIX_PRODUCTION_DATA_OPS.md](APPENDIX_PRODUCTION_DATA_OPS.md)** —— 第 3 章
 
 ---
 
@@ -685,7 +685,7 @@ INSERT INTO shop.products (name, price, stock) VALUES ('iPhone-16', 6999.00, 120
 ### 步骤
 
 ```bash
-# 1. （可选）起一个 Flink CDC 管道（DDL 在 CDC_PIPELINE.md）
+# 1. （可选）起一个 Flink CDC 管道（DDL 在 APPENDIX_CDC_PIPELINE.md）
 #    简化示例：MySQL CDC Source → 直接看 Flink Jobs 列表
 docker exec flink-jobmanager bash -c "curl -s http://localhost:8081/v1/jobs"
 # 预期：{"jobs":[]}（还没跑作业）
@@ -776,7 +776,7 @@ DROP TABLE IF EXISTS orders;
 CREATE TABLE orders (id INT PRIMARY KEY, user_id VARCHAR(10), amount DECIMAL(10,2), status VARCHAR(10));
 INSERT INTO orders VALUES (1,'U001',299.00,'paid'),(2,'U002',1599.00,'paid'),(3,'U003',89.00,'refunded');
 INSERT INTO orders VALUES (4,'U001',299.00,'paid'),(5,'U002',4799.00,'paid');"
-# Flink CDC 同步到 Iceberg（DDL 在 CDC_PIPELINE.md）
+# Flink CDC 同步到 Iceberg（DDL 在 APPENDIX_CDC_PIPELINE.md）
 sleep 60
 
 # 2. Spark SQL 查两边
@@ -819,14 +819,14 @@ JOIN iceberg.audit.orders l ON s.id = l.id;
 ```
 
 > 📖 **完整数据质量校验框架**（Great Expectations 风格的断言、字段校验、空值/重复/类型检查）：
-> **[docs/PRODUCTION_DATA_OPS.md](PRODUCTION_DATA_OPS.md)** —— 第 3 章（全量导入校验 5 条黄金规则）
+> **[docs/APPENDIX_PRODUCTION_DATA_OPS.md](APPENDIX_PRODUCTION_DATA_OPS.md)** —— 第 3 章（全量导入校验 5 条黄金规则）
 
 ---
 
 ## 🧱 Case Study A：存量迁移五步法 + 数仓分层设计
 
 > 本笔记整合了之前三篇迁移专题文档的精华，作为 Roadmap 的高级实战。
-> 完整深度参考：[docs/AUTH_SWITCH.md](AUTH_SWITCH.md)（Kerberos 认证矩阵）+ [docs/CDC_PIPELINE.md](CDC_PIPELINE.md)（CDC 实施）。
+> 完整深度参考：[docs/APPENDIX_AUTH_SWITCH.md](APPENDIX_AUTH_SWITCH.md)（Kerberos 认证矩阵）+ [docs/APPENDIX_CDC_PIPELINE.md](APPENDIX_CDC_PIPELINE.md)（CDC 实施）。
 
 ### 方法论：从源到湖五步迁移法
 
@@ -876,8 +876,8 @@ JOIN iceberg.audit.orders l ON s.id = l.id;
 
 | 源 | 本平台支持 | 参考 |
 |----|----------|------|
-| MySQL ✅ | Flink CDC (Debezium) | CDC_PIPELINE.md |
-| PostgreSQL ✅ | Flink CDC (Debezium) | CDC_PIPELINE.md |
+| MySQL ✅ | Flink CDC (Debezium) | APPENDIX_CDC_PIPELINE.md |
+| PostgreSQL ✅ | Flink CDC (Debezium) | APPENDIX_CDC_PIPELINE.md |
 | MongoDB ✅ | Flink CDC 官方 | 见下方 Case Study B |
 
 #### ⑤ 业务切换五阶段
@@ -929,7 +929,7 @@ JOIN iceberg.audit.orders l ON s.id = l.id;
 
 ### 一套表结构 + 一套逻辑（离线 + 实时）
 
-> 深度参考：[docs/SPARK_OFFLINE_LAKEHOUSE.md](SPARK_OFFLINE_LAKEHOUSE.md)
+> 深度参考：[docs/APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md](APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md)
 
 | 策略 | 说明 |
 |------|------|
@@ -982,7 +982,7 @@ docker exec hbase-master hbase shell <<'HBASE'
 create 'hbase_mongo_products', 'info', 'ts', {SPLITS => ['a','f','k','p','u','z']}
 HBASE
 
-# 3. Flink CDC（MySQL CDC + HBase Sink，完整 DDL 在 CDC_PIPELINE.md）
+# 3. Flink CDC（MySQL CDC + HBase Sink，完整 DDL 在 APPENDIX_CDC_PIPELINE.md）
 docker exec flink-sql-client   # 粘贴 Mongo CDC + HBase Sink DDL
 
 # 4. 验证：MongoDB 改 → HBase 秒级同步
@@ -1031,14 +1031,14 @@ HBASE
 
 | 专题 | 什么时候读 | 文件 |
 |------|----------|------|
-| **CDC 管道完整代码** | 练 2.1 想粘代码跑 | [docs/CDC_PIPELINE.md](CDC_PIPELINE.md) |
-| **Spark 离线作业完整 SQL** | 练 3.3 想粘 SQL / Spark Offline 方法论 | [docs/SPARK_OFFLINE_LAKEHOUSE.md](SPARK_OFFLINE_LAKEHOUSE.md) |
-| **Auth 双向切换** | auth 出问题 / 想切换 | [docs/AUTH_SWITCH.md](AUTH_SWITCH.md) |
+| **CDC 管道完整代码** | 练 2.1 想粘代码跑 | [docs/APPENDIX_CDC_PIPELINE.md](APPENDIX_CDC_PIPELINE.md) |
+| **Spark 离线作业完整 SQL** | 练 3.3 想粘 SQL / Spark Offline 方法论 | [docs/APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md](APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md) |
+| **Auth 双向切换** | auth 出问题 / 想切换 | [docs/APPENDIX_AUTH_SWITCH.md](APPENDIX_AUTH_SWITCH.md) |
 | **Kerberos 管理** | principal / keytab 管理 | [docs/KERBEROS_PRINCIPALS.md](KERBEROS_PRINCIPALS.md) |
-| **HBase 生产操作** | BulkLoad / Region 管理 | [docs/PRODUCTION_DATA_OPS.md](PRODUCTION_DATA_OPS.md) |
-| **故障排查** | 报 Kerberos 错 / classpath 错 / PermissionDenied | [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
-| **DBeaver 连接** | Windows DBeaver Kerberos | [docs/DBEAVER_CONNECTION_GUIDE.md](DBEAVER_CONNECTION_GUIDE.md) |
-| **部署指南** | 全新环境从零部署 | [docs/DEPLOYMENT_NOTES.md](DEPLOYMENT_NOTES.md) |
+| **HBase 生产操作** | BulkLoad / Region 管理 | [docs/APPENDIX_PRODUCTION_DATA_OPS.md](APPENDIX_PRODUCTION_DATA_OPS.md) |
+| **故障排查** | 报 Kerberos 错 / classpath 错 / PermissionDenied | [docs/APPENDIX_TROUBLESHOOTING.md](APPENDIX_TROUBLESHOOTING.md) |
+| **DBeaver 连接** | Windows DBeaver Kerberos | [docs/APPENDIX_DBEAVER_CONNECTION_GUIDE.md](APPENDIX_DBEAVER_CONNECTION_GUIDE.md) |
+| **部署指南** | 全新环境从零部署 | [docs/APPENDIX_DEPLOYMENT_NOTES.md](APPENDIX_DEPLOYMENT_NOTES.md) |
 
 ---
 

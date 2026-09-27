@@ -449,5 +449,5 @@ docker exec kafka bash -c '
 
 ## 十、相关文档
 
-- 部署问题排查：`docs/TROUBLESHOOTING.md`
-- 部署说明：`docs/DEPLOYMENT_NOTES.md`
+- 部署问题排查：`docs/APPENDIX_TROUBLESHOOTING.md`
+- 部署说明：`docs/APPENDIX_DEPLOYMENT_NOTES.md`
