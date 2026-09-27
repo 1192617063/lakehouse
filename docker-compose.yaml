@@ -334,6 +334,7 @@ services:
     ports:
       - "8081:8081"
     volumes:
+      - ./conf/flink/config.yaml:/opt/flink/conf/config.yaml:ro
       - ./conf/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml:ro
       - ./conf/flink/sql-client-defaults.yaml:/opt/flink/conf/sql-client-defaults.yaml:ro
       - ./conf/flink/sql-client-init.sql:/opt/flink/conf/sql-client-init.sql:ro
@@ -368,6 +369,7 @@ services:
       flink-jobmanager:
         condition: service_started
     volumes:
+      - ./conf/flink/config.yaml:/opt/flink/conf/config.yaml:ro
       - ./conf/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml:ro
       - ./conf/flink/sql-client-defaults.yaml:/opt/flink/conf/sql-client-defaults.yaml:ro
       - ./conf/flink/sql-client-init.sql:/opt/flink/conf/sql-client-init.sql:ro
@@ -396,9 +398,9 @@ services:
       FLINK_CLASSPATH: /opt/flink/lib/extra/*
       HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
       HADOOP_HOME: /opt/hadoop
-      FLINK_ENV_JAVA_OPTS: "-Djava.security.auth.login.config=/etc/security/flink-client-jaas.conf -Djavax.security.auth.useSubjectCredsOnly=false"
     volumes:
       - ./sql:/opt/flink/sql
+      - ./conf/flink/config.yaml:/opt/flink/conf/config.yaml:ro
       - ./conf/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml:ro
       - ./conf/flink/sql-client-defaults.yaml:/opt/flink/conf/sql-client-defaults.yaml:ro
       - ./conf/flink/sql-client-init.sql:/opt/flink/conf/sql-client-init.sql:ro
@@ -502,6 +504,7 @@ services:
       - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
       - ./conf/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
       - ./conf/spark/spark-entrypoint.sh:/opt/bitnami/spark/conf/spark-entrypoint.sh:ro
+      - ./conf/spark/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties:ro
       - ./conf/hive/hive-site.xml:/opt/bitnami/spark/conf/hive-site.xml:ro
       - ./conf/hadoop:/opt/hadoop/etc/hadoop:ro
       - ./sql:/opt/spark/sql

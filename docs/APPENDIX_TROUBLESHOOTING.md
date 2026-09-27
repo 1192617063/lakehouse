@@ -94,11 +94,22 @@ volumes:
 
 **根因：** Flink 1.19 的 SQL Client 不会自动执行 `flink-conf.yaml` 中的 Kerberos 登录配置。
 
-**解决方案：** 在 `sql-client-entrypoint.sh` 中先执行 `kinit` 获取 ticket，并通过 `FLINK_ENV_JAVA_OPTS` 设置 JAAS 配置：
+**解决方案：** 在 SQL 脚本中先执行 `kinit` 获取 ticket，并通过 `config.yaml` 配置 JAAS（Flink 1.19 shell 脚本只读 config.yaml，不读 flink-conf.yaml，见 20.1 节）：
 ```bash
-kinit -kt /etc/security/keytabs/flink.service.keytab flink/flink-jobmanager.lakehouse.com@LAKEHOUSE.COM
-export FLINK_ENV_JAVA_OPTS="-Djava.security.auth.login.config=/etc/security/flink-client-jaas.conf -Djavax.security.auth.useSubjectCredsOnly=false"
+kinit -kt /etc/security/keytabs/flink.service.keytab flink/flinkjobmanager.lakehouse.com@LAKEHOUSE.COM
 ```
+`config.yaml` 中 env.java.opts.all 需包含：
+```yaml
+env:
+  java:
+    opts:
+      all: >
+        -Djava.security.auth.login.config=/etc/security/flink-client-jaas.conf
+        -Djavax.security.auth.useSubjectCredsOnly=false
+        --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED
+        ...(其他 add-opens)...
+```
+> ⚠️ 不要在 docker-compose 中设置 `FLINK_ENV_JAVA_OPTS` 环境变量——它会覆盖 config.sh 对 config.yaml env.java.opts 的读取（环境变量优先级高于 YAML 配置）。
 
 ### 3.2 Kerberos keytab 在 KDC 重建后失效
 
@@ -859,3 +870,160 @@ docker exec kerberos kadmin -p admin/admin -w admin123 -q 'listprincs'
 ### 18.3 创建新用户 + keytab（自动化）
 
 见 APPENDIX_TROUBLESHOOTING.md 第 3.4 节（新增认证用户）。
+
+---
+
+## 十九、Spark SQL Warning 问题
+
+### 19.1 `NativeCodeLoader: Unable to load native-hadoop library`
+
+**现象：** `spark-sql` 启动时报 WARNING，说找不到 Hadoop native 库。
+
+**根因：** 容器内没有 `/opt/hadoop/lib/native/*.so`（Hadoop 3.3.6 的 native 库，不是 Spark 的），Hadoop 回退到 Java 实现。这个 WARNING **无害**，不影响功能。
+
+**解决方案：** 创建 `conf/spark/log4j2.properties`（Spark 3.5 默认使用 log4j2）抑制该日志：
+```properties
+logger.nativecode.name = org.apache.hadoop.util.NativeCodeLoader
+logger.nativecode.level = error
+```
+并在 `docker-compose.yaml` spark 服务中挂载：
+```yaml
+- ./conf/spark/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties:ro
+```
+> 注：用 `-Dlog4j.logger=...` 加在 spark.driver.extraJavaOptions 里**不生效**，因为 `-D` 属性在 log4j 初始化时就需要被读取，而 Spark 初始化顺序是：native 代码加载 → log4j 初始化 → 读取 spark-defaults.conf。
+
+### 19.2 `HiveConf: hive.exec.orc.* does not exist`（8 条 warning）
+
+**现象：** `spark-sql` 启动时 HiveConf 报 4 条配置项不存在：`hive.exec.orc.default.compress`、`hive.exec.orc.stripe.size`、`hive.exec.orc.block.size`、`hive.exec.orc.default.row.index.stride`。
+
+**根因：** `conf/hive/hive-site.xml` 里用了 **Hive 3.1.3 新增的 ORC 配置项名**，但 Spark 3.5 内置的 Hive Metastore 版本是 **Hive 2.3.9**，不认识这些 key。Spark 在初始化 HiveConf 时遍历 hive-site.xml 的所有 property，遇到不存在的 key 就打 WARNING。
+
+**解决方案：** 从 hive-site.xml 移除这 4 个 Hive ORC 配置，改用 **Spark 原生的 SQL 配置**写入 `conf/spark/spark-defaults.conf`：
+```properties
+# Spark 原生 ORC 压缩配置（替代 hive-site.xml 中 Hive 3.x 的配置项）
+spark.sql.orc.compression.codec zstd
+spark.sql.orc.default.stripe.size 134217728
+spark.sql.orc.default.block.size 134217728
+```
+Spark 的 ORC writer 通过 `SparkSessionExtensions` 生效，不依赖 Hive 的 ORC 配置。
+
+### 19.3 `DFSPropertiesConfiguration: hudi-defaults.conf not found`
+
+**现象：** Spark SQL 加载 Hudi 扩展后，WARN 说找不到 `hudi-defaults.conf` 和 `HUDI_CONF_DIR`。
+
+**根因：** Hudi bundle jar 里内置了 `org.apache.hudi.common.config.DFSPropertiesConfiguration`，它会尝试加载 Hudi 自定义配置文件。容器内没提供所以打 WARN，**无害**。
+
+**解决方案：** 在 `conf/spark/log4j2.properties` 里抑制整个 `org.apache.hudi` 包：
+```properties
+logger.hudi.name = org.apache.hudi
+logger.hudi.level = error
+```
+
+---
+
+## 二十、Flink 1.19 配置与 JVM Warning
+
+### 20.1 Flink 1.19 shell 脚本只读 config.yaml，不读 flink-conf.yaml
+
+**现象：** `docker exec flink-sql-client` 执行 `sql-client.sh` 时，env.java.opts.all、classloader.parent-first-patterns 等配置**不生效**。你 mount 了 flink-conf.yaml 但 Java 进程拿到的是镜像内默认 config.yaml 的值。
+
+**根因：** Flink 1.19 重构了配置加载机制：
+- **shell 脚本层**（`sql-client.sh`、`flink-daemon.sh`、`config.sh`）通过 `updateAndGetFlinkConfiguration()` 调用 Java 工具类读取 **`config.yaml`**（嵌套 YAML 格式），**完全忽略 flink-conf.yaml**
+- **Flink Java 进程**（JobManager/TaskManager）的 `ClusterEntrypoint` 同时读取 config.yaml 和 flink-conf.yaml（flink-conf.yaml 在 Java 进程启动时由 Flink 自己加载）
+- config.sh 内部的 `readFromConfig()` 用 grep 匹配 `^[ ]*key[ ]*:`，只认 YAML 扁平 key 格式（如 `env.java.opts.all`），但这个函数只被用来**解析 shell 层的 key→value**，实际输入是 `updateAndGetFlinkConfiguration` 输出的 flatten 版 config.yaml
+
+**为什么之前没踩坑：** 镜像自带 `conf/config.yaml`（包含 taskmanager/jobmanager 默认值），我们只 mount 了 flink-conf.yaml，所以 JM/TM 能拿到大部分配置（Java 进程层读取），但 shell 层（sql-client.sh）完全忽略它。
+
+**解决方案：**
+1. 创建项目内 `conf/flink/config.yaml`（**嵌套 YAML 格式**），包含所有需要的配置：
+```yaml
+jobmanager:
+  rpc:
+    address: flinkjobmanager
+taskmanager:
+  numberOfTaskSlots: 8
+  memory:
+    process:
+      size: 4096m
+env:
+  java:
+    opts:
+      all: >
+        --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED
+        -Djava.security.auth.login.config=/etc/security/flink-client-jaas.conf
+        ...(其他参数)...
+classloader:
+  parent-first-patterns:
+    additional: "org.apache.hive.;org.apache.iceberg.;org.apache.paimon."
+```
+2. docker-compose.yaml 的三个 Flink 服务都要 mount config.yaml：
+```yaml
+volumes:
+  - ./conf/flink/config.yaml:/opt/flink/conf/config.yaml:ro
+  - ./conf/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml:ro
+```
+3. **删除** docker-compose 里的 `FLINK_ENV_JAVA_OPTS` 环境变量——它会让 config.sh 跳过读取 config.yaml 里的 env.java.opts.all（`if [ -z "${FLINK_ENV_JAVA_OPTS}" ]; then` 这个判断）。
+
+### 20.2 `Illegal reflective access by KerberosUtil`（Java 11+ 模块系统）
+
+**现象：** Flink SQL Client 启动时打印多条 WARNING：
+```
+WARNING: Illegal reflective access by org.apache.hadoop.security.authentication.util.KerberosUtil
+(file:/opt/flink/lib/extra/flink-shaded-hadoop3-uber-blink-3.7.0.jar)
+to method sun.security.krb5.Config.getInstance()
+WARNING: All illegal access operations will be denied in a future release
+```
+
+**根因：**
+- Flink 1.19 SQL Client 运行在 Java 11（Temurin 11.0.26）
+- Java 9+ 引入模块系统，JDK 内部类（`sun.security.krb5.Config`）默认不可被外部反射访问
+- Flink 的 shaded Hadoop 3.7.0 (`flink-shaded-hadoop3-uber-blink-3.7.0.jar`) 里 `KerberosUtil` 用反射调用 `sun.security.krb5.Config.getInstance()`
+- Java 11 允许这种反射但打 WARNING；Java 17+ 默认完全禁止（需要加 `--add-opens`）
+
+**为什么之前 flink-conf.yaml 里的 `--add-opens` 没生效：** 见 20.1 节——shell 脚本只读 config.yaml，不读 flink-conf.yaml。而且镜像自带的 config.yaml 里虽然有 `--add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED`，但那是 `--add-exports`（只允许导出），反射访问需要 `--add-opens`。
+
+**解决方案：** 在 config.yaml 的 env.java.opts.all 里**同时**加：
+```yaml
+--add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED
+--add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED
+```
+> ⚠️ 注意是 `java.security.jgss/sun.security.krb5`，不是 `java.base/sun.security.krb5`。`sun.security.krb5` 包属于 `java.security.jgss` 模块，写 `java.base/...` 会被 JVM 静默忽略（模块路径不对）。
+
+### 20.3 镜像自带 config.yaml 里有 `jdk.compiler` 的 `--add-exports`
+
+**现象：** 启动 Flink 进程时可能报 `Unrecognized VM option` 或 JVM 直接退出。
+
+**根因：** Flink 官方基础镜像（`flink:1.19.1-scala_2.12-java11`）是 JRE 变体，**没有** `jdk.compiler` 模块。但镜像自带的默认 config.yaml 包含：
+```yaml
+--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED
+--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED
+--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED
+--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED
+--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED
+```
+JVM 遇到不存在的模块会报错退出。
+
+**解决方案：** 项目内的 config.yaml 里**删掉所有** `jdk.compiler` 相关的 `--add-exports`。Flink 1.19 不再需要它们（这是旧版 Flink Scala REPL 的遗留配置）。
+
+---
+
+## 二十一、容器名必须遵循的规则
+
+### 21.1 容器 hostname 不能包含 hyphen
+
+**现象：** Kerberos principal 匹配失败、GSSAPI 构建 hostname 错配。
+
+**根因：** Kerberos realm `LAKEHOUSE.COM` 的 DNS 规范中 hostname 用 `.lakehouse.com` 后缀，KDC principal 为 `service/hostname.lakehouse.com@LAKEHOUSE.COM`。如果 hostname 是 `flink-jobmanager.lakehouse.com`（含 hyphen），会导致 GSSAPI 构建出的 service principal 与 KDC 中注册的不一致。
+
+**解决方案：** 所有容器 hostname 去掉 hyphen：
+| ❌ 错误 | ✅ 正确 |
+|---|---|
+| `flink-jobmanager.lakehouse.com` | `flinkjobmanager.lakehouse.com` |
+| `flink-taskmanager.lakehouse.com` | `flinktaskmanager.lakehouse.com` |
+| `hive-metastore.lakehouse.com` | `hivemetastore.lakehouse.com` |
+
+> 注意：改 hostname 后需要同步更新 KDC principal 名称、所有 Kerberos keytab、config.yaml 中的 security.kerberos.login.principal、spark-defaults.conf 中的 spark.kerberos.principal、Flink jobmanager.rpc.address 等配置。
+
+### 21.2 `.lakehouse.com` suffix 是 Kerberos realm 的 DNS 映射
+
+所有容器 hostname 必须用 `.lakehouse.com` 后缀，因为 Kerberos realm 是 `LAKEHOUSE.COM`（kerberos 配置中 `[domain_realm]` 段已将 `.lakehouse.com` 映射到 `LAKEHOUSE.COM`）。

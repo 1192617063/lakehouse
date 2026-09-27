@@ -1,0 +1,101 @@
+# ============================================================
+# Flink 1.19 config.yaml（标准嵌套格式）
+# shell 脚本（sql-client.sh 等）只读 config.yaml，不读 flink-conf.yaml
+# flink-conf.yaml 仅被 Flink Java 进程（JM/TM）使用
+# ============================================================
+
+jobmanager:
+  rpc:
+    address: flinkjobmanager
+    port: 6123
+  memory:
+    process:
+      size: 4096m
+  bind-host: 0.0.0.0
+
+taskmanager:
+  numberOfTaskSlots: 8
+  memory:
+    process:
+      size: 4096m
+    managed:
+      fraction: 0.4
+  bind-host: 0.0.0.0
+
+rest:
+  address: flinkjobmanager
+  port: 8081
+
+parallelism:
+  default: 1
+
+state:
+  backend: rocksdb
+  # state.backend.incremental 需要用点号作为 key（不是嵌套）
+  backend.incremental: true
+
+execution:
+  checkpointing:
+    interval: 60s
+    mode: EXACTLY_ONCE
+    timeout: 10min
+    min-pause: 30s
+
+classloader:
+  resolve-order: parent-first
+  parent-first-patterns:
+    additional: "org.apache.hive.;org.apache.iceberg.;org.apache.paimon."
+
+# JVM 参数（JM/TM 和 SQL Client 都通过 config.sh 读取）
+# - 添加 --add-opens 解决 KerberosUtil reflective access（Java 11+ 模块系统）
+# - 添加 JAAS 参数（FLINK_ENV_JAVA_OPTS 环境变量已被移除）
+# - 移除 jdk.compiler 相关（Flink JRE 镜像无此模块）
+env:
+  java:
+    opts:
+      all: >
+        -Djava.security.auth.login.config=/etc/security/flink-client-jaas.conf
+        -Djavax.security.auth.useSubjectCredsOnly=false
+        --add-opens=java.base/java.lang=ALL-UNNAMED
+        --add-opens=java.base/java.net=ALL-UNNAMED
+        --add-opens=java.base/java.io=ALL-UNNAMED
+        --add-opens=java.base/java.nio=ALL-UNNAMED
+        --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+        --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+        --add-opens=java.base/java.text=ALL-UNNAMED
+        --add-opens=java.base/java.time=ALL-UNNAMED
+        --add-opens=java.base/java.util=ALL-UNNAMED
+        --add-opens=java.base/java.util.concurrent=ALL-UNNAMED
+        --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED
+        --add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED
+        --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED
+        --add-exports=java.base/sun.net.util=ALL-UNNAMED
+        --add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED
+        --add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED
+
+table:
+  planner: blink
+  exec:
+    resource:
+      default-parallelism: 1
+  catalog-store:
+    kind: file
+    file:
+      path: /opt/flink/conf/catalog-store
+
+security:
+  kerberos:
+    login:
+      use-ticket-cache: false
+      keytab: /etc/security/keytabs/flink.service.keytab
+      principal: flink/flinkjobmanager.lakehouse.com@LAKEHOUSE.COM
+      contexts: Client,KafkaClient
+  delegation:
+    tokens:
+      enabled: false
+
+sql-gateway:
+  endpoint:
+    rest:
+      address: 0.0.0.0
+      port: 8083
