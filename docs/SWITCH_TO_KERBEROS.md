@@ -1,8 +1,10 @@
 # SIMPLE Auth → Kerberos 切换指南
 
-> 当前学习环境默认 **SIMPLE auth**（所有组件免 Kerberos，开箱即用）。
-> 本文档给出切换到 **Kerberos 完整认证** 的精确步骤。
+> **当前默认 Kerberos auth**（所有组件完整认证）。
+> 本文档给出从 **SIMPLE auth（学习简化）** 切换回 **Kerberos 完整认证** 的精确步骤。
 > KDC + 所有 principal + keytabs 已在首次启动时创建，无需重建。
+>
+> 👉 **回滚指南**：从 Kerberos → SIMPLE 见 `docs/SWITCH_TO_SIMPLE.md`
 
 ---
 
@@ -21,16 +23,17 @@
 
 | # | 坑 | 影响 | 规避 |
 |---|----|------|------|
-| 1 | **HBase 2.5.3 内置 Hadoop 2.10.2** 与 HDFS 3.3.6 Kerberos 不兼容 | `NoClassDefFoundError: org.apache.hadoop.thirdparty.com.google.common.collect.Interners` | **切换 Kerberos 时 HBase 保留 SIMPLE**，或单独做 Hadoop 3.3.6 jar 替换 |
+| 1 | ~~HBase 2.5.3 内置 Hadoop 2.10.2 与 HDFS 3.3.6 Kerberos 不兼容~~ | ~~`NoClassDefFoundError: Interners`~~ | ✅ **已解决**：保留 Hadoop 2.10.2 原生 jars（asyncfs HdfsFileStatus 是 class 不兼容 3.x interface），core-site.xml 挂 classpath 让 Hadoop Configuration 自动读 kerberos auth |
 | 2 | Kerberos KDC master key 重建后所有 keytab 作废 | 连接失败 | 切换不需要重建 KDC（principal/keytabs 已经建好了） |
 | 3 | Spark `spark.yarn.archive` + Kerberos delegation token | 必须预打包 JAR 到 HDFS | 当前已配好 `spark.yarn.archive: hdfs://namenode:9000/user/spark/share/spark-jars.tar.gz` |
 | 4 | Flink standalone 必须关 delegation token | Kerberos 下 NPE | `security.delegation.tokens.enabled: false`（已配好） |
 | 5 | Trino 482 Kerberos 属性名变更 | 老属性不识别 | 使用 `hive.metastore.authentication.type=KERBEROS` + principal/keytab |
 | 6 | Hive HS2 外部连接必须 FQDN | GSSAPI 匹配 principal | 用 `hiveserver.lakehouse.com` 不是 IP |
+| 7 | Hadoop 2.10.2 Configuration **不认 HADOOP_CONF_DIR env** | core-site.xml 的 kerberos auth 读不到 | **必须把 core-site.xml 挂到 classpath（`/opt/hbase/conf/core-site.xml`）**，Hadoop 才会自动加载 |
 
 ---
 
-## 切换总览：4 个文件 + 1 次 KDC 确认 + 全栈重启
+## 切换总览：5 个组件 + 1 次 KDC 确认 + 全栈重启
 
 ```
 Step 0: KDC 健康检查 + 确认所有 keytab 存在
@@ -38,10 +41,13 @@ Step 1: HDFS core-site.xml        SIMPLE → KERBEROS
 Step 2: Spark spark-defaults.conf  SIMPLE → KERBEROS
 Step 3: Hive hive-site.xml        NOSASL → KERBEROS + 打开 metastore Kerberos
 Step 4: Trino catalog *.properties NONE → KERBEROS + 打开注释的 principal/keytab
-Step 5: 全栈重启（KDC/HDFS/Hive/Spark/Trino/Iceberg）
-Step 6: HBase 保持 SIMPLE（或单独解决 Hadoop 2.10.2→3.3.6 jar 替换）
+Step 5: HBase — 3 层改动（hbase-site.xml + docker-compose volumes/classpath + kinit + JAVA_TOOL_OPTIONS）
+Step 6: 全栈重启（KDC/HDFS/Hive/Spark/Trino/HBase/Iceberg/Flink）
 Step 7: 验证
 ```
+
+> ⚠️ **HBase 回 Kerberos 是全栈最复杂的**，必须同时改 `conf/hbase/hbase-site.xml` + `docker-compose.yaml` 的 HBase volumes/command/environment。
+> 详细说明（classpath mounts 原理、为何保留 Hadoop 2.10.2 jars）见 `docs/SWITCH_TO_SIMPLE.md` Step 5 的反向操作说明。
 
 ---
 
