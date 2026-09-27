@@ -613,11 +613,91 @@ curl -s http://localhost:8181/v1/namespaces/demo/tables/orders
 
 ---
 
+### 8.9 PostgreSQL CDC 完整 SQL（端到端验证通过 ✅）
+
+PostgreSQL CDC 比 MySQL 多几个前置条件：
+1. `postgresql.conf` 必须 `wal_level=logical`（本环境已满足）
+2. pg_hba.conf 远程连接用 `scram-sha-256`，**必须给 password**（空字符串会报 SCRAM 认证失败）
+3. 表必须 `REPLICA IDENTITY FULL` 才能捕获 UPDATE/DELETE 的 old 值
+4. `slot.name` 要唯一（每个 PG CDC 作业不同 slot）
+
+```sql
+SET sql-client.execution.result-mode=TABLEAU;
+SET 'table.exec.sink.not-null-enforcer' = 'DROP';   -- 存量表 CDC 可能有 NULL
+
+-- === Iceberg Catalog + Sink ===
+DROP CATALOG IF EXISTS iceberg_catalog;
+CREATE CATALOG iceberg_catalog WITH (
+  'type'='iceberg', 'catalog-type'='rest',
+  'uri'='http://iceberg-rest:8181',
+  'warehouse'='hdfs://namenode:9000/user/iceberg'
+);
+USE CATALOG iceberg_catalog;
+CREATE DATABASE IF NOT EXISTS demo;
+CREATE TABLE IF NOT EXISTS demo.pg_demo (
+  id INT, name VARCHAR(50), score INT, ts TIMESTAMP(3),
+  PRIMARY KEY (id) NOT ENFORCED
+) WITH ('format-version'='2', 'write.mode'='upsert');
+
+-- === PostgreSQL CDC Source ===
+CREATE TEMPORARY TABLE pg_src (
+  id INT, name VARCHAR(50), score INT, ts TIMESTAMP(3),
+  PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+  'connector'                 = 'postgres-cdc',
+  'hostname'                  = 'postgres',
+  'port'                      = '5432',
+  'username'                  = 'postgres',
+  'password'                  = 'postgres123',    -- ⚠️ scram-sha-256 必须给
+  'database-name'             = 'cdc_demo',
+  'schema-name'               = 'public',
+  'table-name'                = 'pg_demo',
+  'decoding.plugin.name'      = 'pgoutput',        -- PostgreSQL 10+ 原生 WAL 解码
+  'slot.name'                 = 'flink_pg_demo_slot',
+  'scan.startup.mode'         = 'initial'
+);
+
+-- === 提交 ===
+INSERT INTO iceberg_catalog.demo.pg_demo
+SELECT id, name, score, ts FROM pg_src;
+```
+
+**PostgreSQL 端前置 SQL**：
+```sql
+-- 建表 + 开启 replica identity full（关键！）
+CREATE TABLE pg_demo (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  score INT DEFAULT 0,
+  ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+ALTER TABLE pg_demo REPLICA IDENTITY FULL;
+INSERT INTO pg_demo (name, score) VALUES ('alice',100),('bob',200);
+```
+
+### 8.10 Trino 验证 Iceberg 数据（端到端）
+
+```bash
+# Trino 查 Iceberg REST Catalog 的表
+docker exec trino trino --execute "
+  SELECT id, name, score FROM iceberg.demo.pg_demo ORDER BY id;
+  SELECT id, user_id, amount, status FROM iceberg.demo.orders ORDER BY id;
+"
+```
+
+**踩坑**：`conf/trino/catalog/iceberg.properties` 里 `iceberg.rest-catalog.uri` 不能写错 hostname！
+- ❌ `http://icebergrest:8181`（compose 里没这个 hostname）
+- ✅ `http://iceberg-rest:8181`（compose 里的 service name 是 `iceberg-rest`）
+- 改完需要 `docker compose up -d --force-recreate trino` 重启生效
+
+---
+
 ## 九、当前状态（截至最近一次验证）
 
 | 管道 | 状态 | 数据量 | 验证方式 |
 |------|------|--------|----------|
-| MySQL orders → Iceberg | ✅ 正常 | 1300+ 行 | Trino 查询 |
+| MySQL orders → Iceberg demo.orders | ✅ 正常（本次 CDC demo） | 6 行初始 + binlog | Flink RUNNING + Trino 查询 |
+| PostgreSQL pg_demo → Iceberg demo.pg_demo | ✅ 正常（本次 CDC demo） | 3 行 | Flink RUNNING + Trino 查询 |
 | PostgreSQL users → Hudi | ✅ 正常 | 860+ 行 | Trino 查询 |
 | MySQL products → Paimon | ⚠️ Source 正常，Sink 未提交 | 0 行 | 待修复 |
 
