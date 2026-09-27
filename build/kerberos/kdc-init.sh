@@ -32,7 +32,17 @@ KRB5
 
 if [ ! -f /var/lib/krb5kdc/principal ]; then
     echo "Creating KDC database for realm ${REALM}..."
-    kdb5_util create -r "${REALM}" -s -P "${ADMIN_PASSWORD}"
+    # 不用 -P 参数，避免某些环境下 -P 导致 -s (stash) 被忽略
+    kdb5_util create -r "${REALM}" -s </dev/null
+    # 显式 stash master key（确保 kadmind 能 fetch master key）
+    kdb5_util stash -P "${ADMIN_PASSWORD}" </dev/null 2>/dev/null || \
+        kadmin.local -q "ktadd -k /dev/null K/M@${REALM}" 2>/dev/null || true
+    # 如果 .stash 仍不存在，再手动试一次
+    if [ ! -f /var/lib/krb5kdc/.stash ]; then
+        echo "⚠️  .stash 未生成，手动 kdb5_util stash..."
+        kdb5_util stash -P "${ADMIN_PASSWORD}" 2>&1 || true
+    fi
+    echo "KDC database created. .stash exists: $( [ -f /var/lib/krb5kdc/.stash ] && echo YES || echo NO )"
 fi
 
 cat > /etc/krb5kdc/kadm5.acl <<ACL

@@ -9,6 +9,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# --- source check-auth-status.sh 函数 ---
+source "$(dirname "$0")/check-auth-status.sh"
+
 echo "=========================================="
 echo "  Kerberos → SIMPLE auth 回滚脚本"
 echo "=========================================="
@@ -80,7 +83,7 @@ echo "  ✅ hbase-site.xml Kerberos → simple"
 #     移除 JAVA_TOOL_OPTIONS（Kerberos JVM 系统属性）
 
 python3 <<'PYEOF'
-import re, yaml  # 可能没 yaml，手动处理
+import re  # 纯标准库，不依赖 yaml
 
 with open("docker-compose.yaml", "r") as f:
     content = f.read()
@@ -122,6 +125,7 @@ old_master_env = """    environment:
 new_master_env = """    environment:
       HBASE_HOME: /opt/hbase
       JAVA_HOME: /opt/java/openjdk
+      HADOOP_USER_NAME: hbase
     ports:
       - "16010:16010"
       - "9090:9090"
@@ -150,7 +154,7 @@ old_rs_cmd = 'command: ["bash", "-c", "kinit -kt /etc/security/keytabs/hbase.ser
 new_rs_cmd = 'command: ["bash", "-c", "/opt/hbase/bin/hbase regionserver start"]'
 content = content.replace(old_rs_cmd, new_rs_cmd)
 
-# RS environment: 移除 JAVA_TOOL_OPTIONS
+# RS environment: 移除 JAVA_TOOL_OPTIONS，加 HADOOP_USER_NAME=hbase
 old_rs_env = """    environment:
       HBASE_HOME: /opt/hbase
       JAVA_HOME: /opt/java/openjdk
@@ -162,6 +166,7 @@ old_rs_env = """    environment:
 new_rs_env = """    environment:
       HBASE_HOME: /opt/hbase
       JAVA_HOME: /opt/java/openjdk
+      HADOOP_USER_NAME: hbase
     ports:
       - "16020:16020"
     depends_on: [hbase-master, zookeeper]"""
@@ -190,3 +195,8 @@ echo "  - 想彻底清理 KDC: rm -rf data/kerberos/* conf/kerberos/keytabs/*.ke
 echo "  - 想回 Kerberos: ./scripts/switch-to-kerberos.sh && docker compose down && docker compose up -d"
 echo ""
 echo "备份位置：.switch-state.before-simple/"
+
+# --- 自动跑一次静态检查 ---
+check_auth_status
+echo ""
+echo "💡  重启后确认全栈正常：./scripts/check-auth-status.sh --live 或直接 docker compose ps"

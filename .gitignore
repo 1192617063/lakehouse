@@ -37,3 +37,4 @@ release/
 build/hbase/*.tar.gz
 build/flink/*.tar.gz
 build/spark/*.tar.gz
+.switch-state.*
