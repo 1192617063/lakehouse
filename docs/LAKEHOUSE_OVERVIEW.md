@@ -87,6 +87,90 @@
 
 ---
 
+## 二·扩展、大数据组件深度矩阵
+
+> 本节对全部 21 个容器按 **定位 → 适用场景 → 不适用场景 → 生产注意** 四维度做完整说明，帮助你在真实生产中做技术选型决策。
+
+### 🔐 安全基础设施
+
+| 组件 | 定位 | 适用场景 | 不适用场景 | 生产注意 |
+|------|------|---------|-----------|---------|
+| **Kerberos KDC** (MIT) | 统一认证中心 | 所有需要细粒度权限控制的多组件集群 | 开发测试临时环境（可切 SIMPLE 模式） | ❖ Debian MIT Kerberos 1.20 在容器内**不生成 .stash**（已知 bug），但 krb5kdc/kadmind 可直接读 principal DB，不影响服务<br>❖ kadmin.local 必须在 KDC 容器内跑，远程用 kadmind<br>❖ `kdb5_util stash -P` 会报 "Using existing stashed keys" 但文件不一定真写出——**务必 `ls -la .stash` 确认**<br>❖ 生产建议用 Heimdal Kerberos（macOS/SUSE 默认，.stash 更可靠）|
+
+### 💾 HDFS 分布式文件系统
+
+| 组件 | 定位 | 适用场景 | 不适用场景 | 生产注意 |
+|------|------|---------|-----------|---------|
+| **HDFS NameNode** 3.3.6 | HDFS 元数据管理 | 海量文件（亿级）的统一文件系统、湖仓底层存储 | 小文件密集（< 64MB）、随机写入 | ❖ Kerberos principal: `nn/namenode.lakehouse.com`<br>❖ 单 NN 无 HA（生产需 JournalNode + StandbyNN）<br>❖ `/lakehouse` 目录是所有组件数据根<br>❖ DFS Replication 默认 1（学习用），生产至少 3 |
+| **HDFS DataNode** 3.3.6 | HDFS 数据块存储 | 配合 NameNode 的数据节点 | — | ❖ Kerberos principal: `dn/datanode.lakehouse.com`<br>❖ 数据目录 `./data/hdfs/datanode` 已持久化<br>❖ 容器重建后数据保留 |
+
+### 📊 YARN 资源调度
+
+| 组件 | 定位 | 适用场景 | 不适用场景 | 生产注意 |
+|------|------|---------|-----------|---------|
+| **YARN ResourceManager** 3.3.6 | 集群资源总管 + 应用调度 | Spark on YARN、Hive on Tez 等批处理调度 | 实时流处理（Flink Standalone 更好） | ❖ Kerberos principal: `yarn/resourcemanager.lakehouse.com`<br>❖ 单 RM 无 HA（生产需 ZK + StandbyRM）<br>❖ 核心机制：Container 分配 + delegation token 分发 |
+| **YARN NodeManager** 3.3.6 | 节点资源执行器 | 配合 RM 的计算节点 | — | ❖ Kerberos principal: `yarn/nodemanager.lakehouse.com`<br>❖ Spark executor / Tez task 都跑在 NM 的 Container 里<br>❖ 本环境 NM 只 1 节点，生产多节点 NM 是弹性扩容基础 |
+
+### 🗂️ 元数据与协议层
+
+| 组件 | 定位 | 适用场景 | 不适用场景 | 生产注意 |
+|------|------|---------|-----------|---------|
+| **Hive Metastore** 3.1.3 | 表/列/分区元数据中心 | Iceberg/Hudi/Paimon/Hive 表统一元数据、Spark/Trino/Hive 共用 catalog | — | ❖ Kerberos principal: `hive/hivemetastore.lakehouse.com`<br>❖ 元数据存 MySQL（`hivemetastore` DB）<br>❖ **所有计算引擎都通过 HMS 查表**——HMS 挂 = 全栈查表失败 |
+| **HiveServer2** 3.1.3 | SQL Thrift/HTTP 服务 | BI 工具（DBeaver）、Beeline CLI、传统 Hive SQL 脚本 | 高频低延迟查询（Trino 更好） | ❖ Kerberos principal: `hive/hiveserver.lakehouse.com` + `HTTP/hiveserver.lakehouse.com`<br>❖ 支持 SASL Kerberos + HTTP SPNEGO 两种认证<br>❖ Tez 为执行引擎（本环境 `TEZ_HOME=/dev/null` 禁 Tez 用 MR） |
+| **Iceberg REST Catalog** 1.5.2 | Iceberg 表的 REST 式 catalog | Flink/Spark/Trino 多引擎统一 Iceberg catalog、表管理 API | Hudi/Paimon 表（它们有独立 catalog） | ❖ Kerberos principal: `iceberg/icebergrest.lakehouse.com`<br>❖ 数据存 HDFS `/lakehouse/iceberg/`<br>❖ REST 协议比 Hive Metastore 更轻量，适合云原生场景 |
+
+### 🔥 计算引擎 —— 实时流处理
+
+| 组件 | 定位 | 适用场景 | 不适用场景 | 生产注意 |
+|------|------|---------|-----------|---------|
+| **Flink JobManager** 1.19.1 | Flink 集群大脑 + 任务调度 | 实时 CDC 入湖、窗口计算、低延迟 ETL | 离线大规模批处理（Spark 更好） | ❖ Kerberos principal: `flink/flinkjobmanager.lakehouse.com`<br>❖ **必须关 delegation token**（standalone 模式不支持，开了 NPE）<br>❖ Checkpoint 存 HDFS，生产需配 RocksDB 状态后端 |
+| **Flink TaskManager** 1.19.1 | Flink 数据处理执行节点 | 配合 JM 的实际计算 | — | ❖ Kerberos principal 复用 JM（Flink 集群级 principal）<br>❖ 1 个 TM = 1 JVM，Slot 数决定并行度上限 |
+| **Flink SQL Client / Gateway** 1.19.1 | Flink SQL 交互入口 | Flink SQL DDL/DML 提交、CDC Pipeline 开发 | — | ❖ SQL Gateway 模式（embedded JVM Subject 带 TGT）<br>❖ 有 Iceberg + Paimon + Kafka connector jar |
+
+### 🔥 计算引擎 —— 离线批处理
+
+| 组件 | 定位 | 适用场景 | 不适用场景 | 生产注意 |
+|------|------|---------|-----------|---------|
+| **Spark Master** 3.5.6 (YARN) | Spark 批处理引擎 | 每日/每小时 ETL、大规模 SQL、机器学习特征工程 | 实时流处理（Flink 更好）、高频交互查询（Trino 更好） | ❖ Kerberos principal: `spark/sparkmaster.lakehouse.com`<br>❖ **Spark on YARN**，需 delegation token（Flink 不需要！）<br>❖ 关键配置：`spark.yarn.principal` + `spark.yarn.keytab`<br>❖ `spark-submit --master yarn` 提交到 YARN 集群 |
+
+### 🔥 计算引擎 —— 联邦查询
+
+| 组件 | 定位 | 适用场景 | 不适用场景 | 生产注意 |
+|------|------|---------|-----------|---------|
+| **Trino Coordinator** 482 | 分布式 SQL 查询引擎 | 跨多数据源（Iceberg + Hive + Doris + MySQL）联邦查询、BI 即席查询 | 实时流处理、CDC、写入（Upsert） | ❖ Kerberos principal: `trino/trino.lakehouse.com`<br>❖ **只读**——Trino 不做写入，写入靠 Spark/Flink<br>❖ Catalog 配置：`iceberg.properties` → Iceberg REST、`hive.properties` → Hive Metastore<br>❖ Paimon connector 482 不完整，用 Flink/Spark 查 Paimon |
+
+### 📨 消息队列
+
+| 组件 | 定位 | 适用场景 | 不适用场景 | 生产注意 |
+|------|------|---------|-----------|---------|
+| **Kafka Broker** 3.9.0 | 分布式消息队列 | CDC 数据管道、解耦生产/消费、事件驱动架构 | 大规模文件存储（HDFS 更好） | ❖ Kerberos principal: `kafka/kafka.lakehouse.com`<br>❌ **⚠️ Kafka SASL_PLAINTEXT 下 Kerberos 需额外加 JAAS + server.properties 配置**——本环境 SASL_PLAINTEXT 下 Kafka 认证是 PLAIN（非 Kerberos），Kerberos 在 SASL_SSL 模式下才完整<br>❖ Topic 分区数决定消费并行度上限 |
+
+### 🔑 KV / 列族存储
+
+| 组件 | 定位 | 适用场景 | 不适用场景 | 生产注意 |
+|------|------|---------|-----------|---------|
+| **HBase Master** 2.5.3 | HBase 集群管理 | KV/列族存储、亚秒级随机点查、宽列（百列）、时序数据 | SQL JOIN、全表扫描分析（用 Spark/Trino） | ❖ Kerberos principal: `hbase/hbasemaster.lakehouse.com`<br>❖ **HBase 2.5.3 内置 Hadoop 2.10.2 jar——不要替换成 Hadoop 3.x**（HdfsFileStatus class vs interface 不兼容）<br>❖ HBase 不支持 `-e` 参数，用 heredoc: `hbase shell <<'HBS' ... exit HBS`<br>❖ 数据根目录：HDFS `/hbase/` |
+| **HBase Regionserver** 2.5.3 | HBase 数据节点 | 配合 HM 的实际数据读写 | — | ❖ Kerberos principal: `hbase/hbaseregionserver.lakehouse.com`<br>❖ HBase kinit: `-kt /etc/security/keytabs/hbase.service.keytab hbase/hbasemaster.lakehouse.com`<br>❖ Region Split / Compact 自动管理 |
+
+### ⚡ OLAP 分析引擎
+
+| 组件 | 定位 | 适用场景 | 不适用场景 | 生产注意 |
+|------|------|---------|-----------|---------|
+| **Doris FE** 2.1.7 | OLAP 查询协调 + 元数据 | 高频低延迟分析、点查、报表加速 | Kerberos 生态（Doris 用独立认证）、大规模 ETL | ❌ **无 Kerberos**——Doris 用自己的 Root/Admin 账号<br>❖ Doris 不读 HDFS（内部自带存储 BE）<br>❖ 典型用法：Paimon/Iceberg → Doris Stream Load 同步 → 报表 |
+| **Doris BE** 2.1.7 | OLAP 数据存储节点 | 配合 FE 的实际数据分片 | — | ❌ 无 Kerberos<br>❌ 数据持久化在 BE 容器本地卷 |
+
+### 🗄️ 源数据库
+
+| 组件 | 定位 | 适用场景 | 不适用场景 | 生产注意 |
+|------|------|---------|-----------|---------|
+| **MySQL 8.0.46** | OLTP 源数据 + Hive 元存储 | 业务数据库、CDC 源头（Flink CDC MySQL） | 大规模分析（用湖仓） | ❖ `hivemetastore` DB 存 Hive 元数据（无 Kerberos）<br>❖ Flink CDC 需 MySQL 开 binlog + `server-id`<br>❖ 生产 MySQL → 湖仓是经典架构 |
+| **PostgreSQL 16.4** | OLTP 源数据 | 业务数据库、CDC 源头（Flink CDC PG） | — | ❖ Flink CDC PG 需 `wal_level=logical` + 复制槽 |
+| **MongoDB 7.0** | NoSQL 源数据 | 文档型业务数据、存量迁移→HBase | — | ❖ Flink CDC MongoDB 需副本集（replicaSet）模式 |
+
+---
+
+*最后更新：2026-09-27 — 添加 21 容器完整组件矩阵（定位/适用/不适用/生产注意）*
+
 ## 三、技术选型与适用场景
 
 ### 3.1 湖存储格式对比
@@ -206,15 +290,15 @@ klist  # 查看 ticket
 
 | 专题 | 文件 | 内容 |
 |------|------|------|
-| **从零部署指南** | [APPENDIX_DEPLOYMENT_NOTES.md](APPENDIX_DEPLOYMENT_NOTES.md) | 全新环境 docker compose 部署流程 |
-| **部署故障排查** | [APPENDIX_TROUBLESHOOTING.md](APPENDIX_TROUBLESHOOTING.md) | 13-18 节 Kerberos 相关坑点全集 |
-| **DBeaver 连接指南** | [APPENDIX_DBEAVER_CONNECTION_GUIDE.md](APPENDIX_DBEAVER_CONNECTION_GUIDE.md) | Windows DBeaver → HiveServer2 Kerberos 连接 |
-| **CDC 实时数据管道** | [APPENDIX_CDC_PIPELINE.md](APPENDIX_CDC_PIPELINE.md) | MySQL/PG → Flink CDC → Kafka → Iceberg/Hudi/Paimon |
-| **Spark 离线湖仓一体** | [APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md](APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md) | Spark on YARN Kerberos + delegation token + 批量导出 |
-| **生产数据操作** | [APPENDIX_PRODUCTION_DATA_OPS.md](APPENDIX_PRODUCTION_DATA_OPS.md) | 存量导入、积压处理、HFile BulkLoad |
-| **MongoDB→HBase 迁移** | [LEARNING_ROADMAP.md#-case-study-bmongodb--hbase-存量迁移](LEARNING_ROADMAP.md) | Roadmap 高级 Case Study B（已合并） |
-| **存量迁移与集群规划** | [LEARNING_ROADMAP.md#-case-study-a存量迁移五步法--数仓分层设计](LEARNING_ROADMAP.md) | Roadmap 高级 Case Study A：五步法 + 选型决策树 + 架构图 + Kerberos 矩阵 |
+| **从零部署指南** | [APPENDIX_DEPLOYMENT.md](APPENDIX_DEPLOYMENT.md) | 全新环境 docker compose 部署流程 |
+| **生产运维手册** | [APPENDIX_OPS_HANDBOOK.md](APPENDIX_OPS_HANDBOOK.md) | 故障排查 Playbook（HBase/HDFS/Flink/Spark/KDC）|
+| **DBeaver 连接指南** | [APPENDIX_DBEAVER.md](APPENDIX_DBEAVER.md) | Windows DBeaver → HiveServer2 Kerberos 连接 |
+| **CDC 实时数据管道** | [APPENDIX_CDC_PIPELINE.md](APPENDIX_CDC_PIPELINE.md) | MySQL/PG/Mongo → Flink CDC → Kafka → Iceberg/Hudi/Paimon |
+| **Spark 离线湖仓一体** | [APPENDIX_SPARK_OFFLINE.md](APPENDIX_SPARK_OFFLINE.md) | Spark on YARN Kerberos + delegation token + 批量导出 |
+| **故障排查全集** | [APPENDIX_TROUBLESHOOTING.md](APPENDIX_TROUBLESHOOTING.md) | Kerberos/HDFS/HBase/Flink 坑点全集 |
+| **Kerberos ↔ SIMPLE 切换** | [APPENDIX_AUTH_SWITCH.md](APPENDIX_AUTH_SWITCH.md) | 一键切换 Kerberos/SIMPLE 认证模式 |
 | **Kerberos Principal 清单** | [APPENDIX_KERBEROS.md](APPENDIX_KERBEROS.md) | 所有 principal + 用途 + 管理命令 |
+| **学习路线图** | [LEARNING_ROADMAP.md](LEARNING_ROADMAP.md) | 3 阶段 16 练习 + Case Study（存量迁移 + 数仓分层） |
 
 ---
 

@@ -2,6 +2,9 @@ services:
   namenode:
     image: ${HADOOP_IMAGE}
     container_name: namenode
+    depends_on:
+      kerberos:
+        condition: service_healthy
     hostname: namenode.lakehouse.com
     command: ["hdfs", "namenode"]
     environment:
@@ -25,7 +28,11 @@ services:
     command: ["hdfs", "datanode"]
     environment:
       - HADOOP_HOME=/opt/hadoop
-    depends_on: [namenode]
+    depends_on:
+      kerberos:
+        condition: service_healthy
+      namenode:
+        condition: service_started
     networks:
       lakehouse-net:
         ipv4_address: 172.30.80.42
@@ -47,7 +54,11 @@ services:
       - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
     ports:
       - "8088:8088"
-    depends_on: [namenode]
+    depends_on:
+      kerberos:
+        condition: service_healthy
+      namenode:
+        condition: service_started
     networks:
       lakehouse-net:
         ipv4_address: 172.30.80.33
@@ -65,7 +76,11 @@ services:
     environment:
       - HADOOP_HOME=/opt/hadoop
       - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
-    depends_on: [yarn-resource-manager]
+    depends_on:
+      kerberos:
+        condition: service_healthy
+      yarn-resource-manager:
+        condition: service_started
     networks:
       lakehouse-net:
         ipv4_address: 172.30.80.34
@@ -85,7 +100,15 @@ services:
       IS_RESUME: "true"
       HIVE_CUSTOM_CONF_DIR: /opt/hive/custom-conf
     ports: ["9083:9083"]
-    depends_on: [namenode, mysql, yarn-resource-manager]
+    depends_on:
+      kerberos:
+        condition: service_healthy
+      namenode:
+        condition: service_started
+      mysql:
+        condition: service_started
+      yarn-resource-manager:
+        condition: service_started
     networks:
       lakehouse-net:
         ipv4_address: 172.30.80.43
@@ -114,7 +137,13 @@ services:
       # HiveServer2 不需要 tez jar 在 classpath 里——tez 通过 tez.lib.uris 在 YARN 容器加载
       TEZ_HOME: /dev/null
     ports: ["21066:21066", "21067:21067"]
-    depends_on: [hive-metastore, yarn-resource-manager]
+    depends_on:
+      kerberos:
+        condition: service_healthy
+      hive-metastore:
+        condition: service_started
+      yarn-resource-manager:
+        condition: service_started
     volumes:
       - ./lib/mysql/mysql-connector-j-8.4.0.jar:/opt/hive/lib/mysql-connector-j-8.4.0.jar:ro
       - ./lib/hadoop-3.3.6:/opt/hadoop:ro
@@ -158,7 +187,9 @@ services:
     networks:
       lakehouse-net:
         ipv4_address: 172.30.80.50
-    depends_on: [namenode, mysql]
+    depends_on:
+      kerberos:
+        condition: service_healthy
     mem_limit: 1g
 
   zookeeper:
@@ -193,7 +224,13 @@ services:
     ports:
       - "16010:16010"
       - "9090:9090"
-    depends_on: [namenode, zookeeper]
+    depends_on:
+      kerberos:
+        condition: service_healthy
+      namenode:
+        condition: service_started
+      zookeeper:
+        condition: service_started
     volumes:
       # 关键：kerberos 版 core-site.xml 放到 HBase classpath 上 → Hadoop Configuration 自动加载
       - ./conf/hadoop/core-site.xml:/opt/hbase/conf/core-site.xml:ro
@@ -220,7 +257,13 @@ services:
       JAVA_TOOL_OPTIONS: "-Djava.security.krb5.conf=/etc/krb5.conf -Djavax.security.auth.useSubjectCredsOnly=false"
     ports:
       - "16020:16020"
-    depends_on: [hbase-master, zookeeper]
+    depends_on:
+      kerberos:
+        condition: service_healthy
+      hbase-master:
+        condition: service_started
+      zookeeper:
+        condition: service_started
     volumes:
       - ./conf/hadoop/core-site.xml:/opt/hbase/conf/core-site.xml:ro
       - ./conf/hadoop/hdfs-site.xml:/opt/hbase/conf/hdfs-site.xml:ro
@@ -237,6 +280,9 @@ services:
   kafka:
     image: ${KAFKA_IMAGE}
     container_name: kafka
+    depends_on:
+      kerberos:
+        condition: service_healthy
     hostname: kafka.lakehouse.com
     environment:
       KAFKA_NODE_ID: 1
@@ -276,6 +322,9 @@ services:
       args:
         FLINK_BASE_IMAGE: ${FLINK_BASE_IMAGE}
     container_name: flink-jobmanager
+    depends_on:
+      kerberos:
+        condition: service_healthy
     hostname: flinkjobmanager.lakehouse.com
     command: jobmanager
     environment:
@@ -314,7 +363,10 @@ services:
       HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
       HADOOP_HOME: /opt/hadoop
     depends_on:
-      - flink-jobmanager
+      kerberos:
+        condition: service_healthy
+      flink-jobmanager:
+        condition: service_started
     volumes:
       - ./conf/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml:ro
       - ./conf/flink/sql-client-defaults.yaml:/opt/flink/conf/sql-client-defaults.yaml:ro
@@ -358,8 +410,8 @@ services:
       - ./conf/kerberos/flink-client-jaas.conf:/etc/security/flink-client-jaas.conf:ro
       - ./data/flink/catalog-store:/opt/flink/conf/catalog-store
     depends_on:
-      - flink-jobmanager
-      - flink-taskmanager
+      kerberos:
+        condition: service_healthy
     networks:
       lakehouse-net:
         ipv4_address: 172.30.80.5
@@ -436,7 +488,13 @@ services:
       - HADOOP_HOME=/opt/hadoop
       - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
       - KRB5CCNAME=/tmp/krb5cc_spark
-    depends_on: [yarn-resource-manager, hive-metastore]
+    depends_on:
+      kerberos:
+        condition: service_healthy
+      yarn-resource-manager:
+        condition: service_started
+      hive-metastore:
+        condition: service_started
     ports:
       - "4040:4040"
     volumes:
@@ -500,9 +558,14 @@ services:
     ports:
       - "8085:8080"
     depends_on:
-      - namenode
-      - hive-metastore
-      - iceberg-rest
+      kerberos:
+        condition: service_healthy
+      namenode:
+        condition: service_started
+      hive-metastore:
+        condition: service_started
+      iceberg-rest:
+        condition: service_started
     volumes:
       - ./conf/trino:/etc/trino:ro
       - ./conf/hadoop:/opt/hadoop/etc/hadoop:ro
@@ -534,6 +597,14 @@ services:
       lakehouse-net:
         ipv4_address: 172.30.80.60
     mem_limit: 1g
+    # KDC 健康检查：kadmin.local getprincs 能跑 = krb5kdc + kadmind 都在工作
+    # Debian slim 没有 pgrep，所以直接用 kadmin 命令
+    healthcheck:
+      test: ["CMD", "kadmin.local", "-q", "getprincs"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
 
 volumes:
   zk_data:

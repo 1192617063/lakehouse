@@ -32,10 +32,14 @@ KRB5
 
 if [ ! -f /var/lib/krb5kdc/principal ]; then
     echo "Creating KDC database for realm ${REALM}..."
-    # 不用 -P 参数，避免某些环境下 -P 导致 -s (stash) 被忽略
-    kdb5_util create -r "${REALM}" -s </dev/null
+    # ⚠️ 必须用 heredoc 给密码（</dev/null 在 Debian MIT Kerberos 1.20 报 "Cannot read password"）
+    # -s 某些 Debian 环境不生成 .stash → 后面显式 kdb5_util stash -P
+    kdb5_util create -r "${REALM}" -s <<EOF
+${ADMIN_PASSWORD}
+${ADMIN_PASSWORD}
+EOF
     # 显式 stash master key（确保 kadmind 能 fetch master key）
-    kdb5_util stash -P "${ADMIN_PASSWORD}" </dev/null 2>/dev/null || \
+    kdb5_util stash -P "${ADMIN_PASSWORD}" 2>&1 || \
         kadmin.local -q "ktadd -k /dev/null K/M@${REALM}" 2>/dev/null || true
     # 如果 .stash 仍不存在，再手动试一次
     if [ ! -f /var/lib/krb5kdc/.stash ]; then
@@ -44,6 +48,27 @@ if [ ! -f /var/lib/krb5kdc/principal ]; then
     fi
     echo "KDC database created. .stash exists: $( [ -f /var/lib/krb5kdc/.stash ] && echo YES || echo NO )"
 fi
+
+# ========== 关键：.stash 无论 principal 是否存在都要检查 ==========
+# Debian MIT Kerberos 已知问题：create -s 不保证生成 .stash
+# 所以无论 create 分支是否跑过，都强制检查 + 生成 .stash
+STASH_FILE="/var/lib/krb5kdc/.stash"
+if [ ! -f "${STASH_FILE}" ]; then
+    echo "⚠️  .stash 缺失（Debian MIT Kerberos bug），强制 kdb5_util stash..."
+    kdb5_util stash -P "${ADMIN_PASSWORD}" 2>&1 || {
+        echo "  stash 失败，启动临时 krb5kdc 初始化 master entry..."
+        setsid krb5kdc -n >/tmp/krb5kdc-temp.log 2>&1 &
+        TMP_PID=$!
+        sleep 5
+        kdb5_util stash -P "${ADMIN_PASSWORD}" 2>&1 || {
+            echo "❌❌❌ .stash 彻底无法生成，KDC 无法启动"
+            kill $TMP_PID 2>/dev/null; exit 1
+        }
+        kill $TMP_PID 2>/dev/null; sleep 1
+    }
+    echo "✅ .stash 已生成"
+fi
+echo "确认 .stash: $( [ -f "${STASH_FILE}" ] && echo YES || echo NO )"
 
 cat > /etc/krb5kdc/kadm5.acl <<ACL
 */admin@${REALM}    *
@@ -98,25 +123,15 @@ create_and_export "yarn/resourcemanager.lakehouse.com@${REALM}" "${KEYTAB_DIR}/r
 create_and_export "yarn/nodemanager.lakehouse.com@${REALM}" "${KEYTAB_DIR}/nm.service.keytab"
 
 # HBase keytab：master + regionserver 两个 principal（同一个 keytab）
-# 注意：keytab 已存在时也要 check principal 是否存在（之前 principal 被吞过静默丢失）
 HBASE_KEYTAB="${KEYTAB_DIR}/hbase.service.keytab"
-HBASE_MASTER="hbase/hbasemaster.lakehouse.com@${REALM}"
-HBASE_RS="hbase/hbaseregionserver.lakehouse.com@${REALM}"
-
-HBASE_MISSING=false
-kadmin.local -q "getprinc ${HBASE_MASTER}" 2>&1 | grep -q "Principal does not exist" && HBASE_MISSING=true
-
-if $HBASE_MISSING; then
-    echo "⚠️ HBase principal 缺失（被之前的 bug 吞了），重建..."
-    kadmin.local -q "addprinc -randkey ${HBASE_MASTER}"
-    kadmin.local -q "addprinc -randkey ${HBASE_RS}"
-    kadmin.local -q "ktadd -k ${HBASE_KEYTAB} ${HBASE_MASTER} ${HBASE_RS}"
-elif [ ! -f "${HBASE_KEYTAB}" ]; then
-    kadmin.local -q "addprinc -randkey ${HBASE_MASTER}" 2>/dev/null || true
-    kadmin.local -q "addprinc -randkey ${HBASE_RS}" 2>/dev/null || true
-    kadmin.local -q "ktadd -k ${HBASE_KEYTAB} ${HBASE_MASTER} ${HBASE_RS}" 2>/dev/null || true
+if [ ! -f "${HBASE_KEYTAB}" ]; then
+    kadmin.local -q "addprinc -randkey hbase/hbasemaster.lakehouse.com@${REALM}" 2>/dev/null || true
+    kadmin.local -q "addprinc -randkey hbase/hbaseregionserver.lakehouse.com@${REALM}" 2>/dev/null || true
+    kadmin.local -q "ktadd -k ${HBASE_KEYTAB} hbase/hbasemaster.lakehouse.com@${REALM} hbase/hbaseregionserver.lakehouse.com@${REALM}" 2>/dev/null || true
+    chmod 644 "${HBASE_KEYTAB}" 2>/dev/null || true
+else
+    echo "Keytab ${HBASE_KEYTAB} already exists, skipping key rotation"
 fi
-chmod 644 "${HBASE_KEYTAB}" 2>/dev/null || true
 
 kadmin.local -q "addprinc -randkey lakehouse@${REALM}" 2>/dev/null || true
 if [ ! -f "${KEYTAB_DIR}/lakehouse.keytab" ]; then
