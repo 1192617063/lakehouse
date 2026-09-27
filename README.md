@@ -203,13 +203,11 @@ Release 包包含：
 | 文档 | 内容 |
 |------|------|
 | [总览笔记](docs/LAKEHOUSE_OVERVIEW.md) | ⭐ 平台架构、组件表、快速上手（**先读这个**） |
-| [**学习路径（初→中→资深）**](docs/LEARNING_PATH.md) | ⭐ **实战练习册**：跨引擎查询 / CDC 管道 / BulkLoad / 小文件治理 / 数据倾斜 |
+| [**Learning Roadmap（初→资深完整路径）**](docs/LEARNING_ROADMAP.md) | ⭐ **单一知识地图**：三阶段 12 案例 + 存量迁移方法论 + MongoDB→HBase 实施 + 数仓分层 + Kerberos 认证矩阵 |
 | [Kerberos 清单](docs/KERBEROS_PRINCIPALS.md) | 所有 principal + 管理命令 + 新增组件 Checklist |
 | [**Auth 切换（Kerberos ↔ SIMPLE）**](docs/AUTH_SWITCH.md) | ⭐ **双向完整指南**：一键脚本 + HBase 3 层改动详解 + 7 个已知坑点 |
-| [存量迁移与集群规划](docs/MIGRATION_AND_CLUSTER_PLANNING.md) | 迁移方法论 + 实时/离线数仓架构设计 |
-| [MongoDB → HBase 迁移](docs/MIGRATION_MONGODB_TO_HBASE.md) | MongoDB 存量数据迁移实施指南 |
-| [CDC 管道](docs/CDC_PIPELINE.md) | MySQL/PG → Flink CDC → Kafka → Iceberg/Hudi/Paimon |
-| [Spark 离线湖仓](docs/SPARK_OFFLINE_LAKEHOUSE.md) | Spark on YARN Kerberos + delegation token |
+| [CDC 管道（深度代码）](docs/CDC_PIPELINE.md) | MySQL/PG → Flink CDC → Kafka → Iceberg/Hudi/Paimon（完整 DDL + Kafka topic 设计） |
+| [Spark 离线湖仓（深度）](docs/SPARK_OFFLINE_LAKEHOUSE.md) | Spark on YARN Kerberos + delegation token + 离线/实时一套表结构方法论 |
 | [DBeaver 连接](docs/DBEAVER_CONNECTION_GUIDE.md) | Windows DBeaver Kerberos 连 HiveServer2 |
 | [部署指南](docs/DEPLOYMENT_NOTES.md) | 全新环境从零部署步骤 |
 | [故障排查](docs/TROUBLESHOOTING.md) | 所有 Kerberos 坑点 + 解决方案 |
