@@ -212,8 +212,8 @@ klist  # 查看 ticket
 | **CDC 实时数据管道** | [CDC_PIPELINE.md](CDC_PIPELINE.md) | MySQL/PG → Flink CDC → Kafka → Iceberg/Hudi/Paimon |
 | **Spark 离线湖仓一体** | [SPARK_OFFLINE_LAKEHOUSE.md](SPARK_OFFLINE_LAKEHOUSE.md) | Spark on YARN Kerberos + delegation token + 批量导出 |
 | **生产数据操作** | [PRODUCTION_DATA_OPS.md](PRODUCTION_DATA_OPS.md) | 存量导入、积压处理、HFile BulkLoad |
-| **MongoDB→HBase 迁移** | [MIGRATION_MONGODB_TO_HBASE.md](MIGRATION_MONGODB_TO_HBASE.md) | 存量数据迁移实施指南 |
-| **存量迁移与集群规划** | [MIGRATION_AND_CLUSTER_PLANNING.md](MIGRATION_AND_CLUSTER_PLANNING.md) | 迁移方案 + 实时集群规划 + 组件选型 |
+| **MongoDB→HBase 迁移** | [LEARNING_ROADMAP.md#-case-study-bmongodb--hbase-存量迁移](LEARNING_ROADMAP.md) | Roadmap 高级 Case Study B（已合并） |
+| **存量迁移与集群规划** | [LEARNING_ROADMAP.md#-case-study-a存量迁移五步法--数仓分层设计](LEARNING_ROADMAP.md) | Roadmap 高级 Case Study A：五步法 + 选型决策树 + 架构图 + Kerberos 矩阵 |
 | **Kerberos Principal 清单** | [KERBEROS_PRINCIPALS.md](KERBEROS_PRINCIPALS.md) | 所有 principal + 用途 + 管理命令 |
 
 ---
