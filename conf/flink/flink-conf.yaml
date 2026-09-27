@@ -17,7 +17,10 @@ execution.checkpointing.timeout: 10min
 execution.checkpointing.min-pause: 30s
 
 classloader.resolve-order: parent-first
-classloader.parent-first-patterns.additional: org.apache.hadoop.;org.apache.hive.;org.apache.iceberg.;org.apache.paimon.
+# 注意：org.apache.hadoop 不能在 parent-first 里！
+# Flink 自己打包了 shaded Hadoop 3.7.0 (flink-shaded-hadoop3-uber-blink-3.7.0.jar)
+# 外部 Hadoop 3.3.6 会覆盖它导致 Kerberos UGI 不兼容（GSS initiate failed）
+classloader.parent-first-patterns.additional: org.apache.hive.;org.apache.iceberg.;org.apache.paimon.
 
 env.java.opts.all: --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.text=ALL-UNNAMED --add-opens=java.base/java.time=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED --add-exports=java.base/sun.net.util=ALL-UNNAMED --add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED --add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED
 
@@ -31,4 +34,11 @@ security.kerberos.login.use-ticket-cache: false
 security.kerberos.login.keytab: /etc/security/keytabs/flink.service.keytab
 security.kerberos.login.principal: flink/flink-jobmanager.lakehouse.com@LAKEHOUSE.COM
 security.kerberos.login.contexts: Client,KafkaClient
+# Flink standalone 模式下 JM + TM 都用 keytab 做 Kerberos 登录
+# 自己持有 TGT 不需要 delegation token（delegation token 是给 YARN container 里无 TGT 进程用的）
 security.delegation.tokens.enabled: false
+
+# SQL Gateway REST endpoint（在 JM 里 start，会继承 JM 的 Kerberos UGI subject）
+sql-gateway.endpoint.rest.address: 0.0.0.0
+sql-gateway.endpoint.rest.port: 8083
+

@@ -16,7 +16,7 @@ DROP CATALOG IF EXISTS paimon_catalog;
 CREATE CATALOG paimon_catalog WITH (
   'type'='paimon',
   'metastore'='hive',
-  'uri'='thrift://hive-metastore:9083',
+  'uri'='thrift://hivemetastore.lakehouse.com:9083',
   'warehouse'='hdfs://namenode:9000/user/paimon',
   'hive-conf-dir'='/opt/flink/conf',
   'hive.metastore.kerberos.principal'='hive/hivemetastore.lakehouse.com@LAKEHOUSE.COM'
