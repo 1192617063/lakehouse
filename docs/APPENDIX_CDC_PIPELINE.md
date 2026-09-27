@@ -429,6 +429,190 @@ docker exec kafka bash -c '
 
 ---
 
+## 八、Flink SQL Client 实操指南（踩坑笔记）
+
+> 本节记录 **Flink SQL Client 非交互模式 + Kerberos + Iceberg REST Catalog + MySQL CDC** 的完整走查步骤。
+> 以下所有命令均在 `flink-sql-client` 容器内执行，经过端到端验证 ✅。
+
+### 8.1 容器内 kinit + 环境变量（每次跑 SQL 前必做）
+
+```bash
+docker exec flink-sql-client bash -c '
+export KRB5CCNAME=/tmp/krb5cc_flink
+kinit -kt /etc/security/keytabs/flink.service.keytab flink/flinkjobmanager.lakehouse.com@LAKEHOUSE.COM
+export FLINK_CLASSPATH=/opt/flink/lib/extra/*
+export HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+export FLINK_ENV_JAVA_OPTS="-Djava.security.auth.login.config=/etc/security/flink-client-jaas.conf -Djavax.security.auth.useSubjectCredsOnly=false"
+# 下面写你的 SQL 或 sql-client.sh 命令...
+'
+```
+
+### 8.2 非交互模式必须加的 SET
+
+```sql
+SET sql-client.execution.result-mode=TABLEAU;
+```
+
+**坑**：不加这条，`sql-client.sh -f xxx.sql` 里的 SELECT 查询会报：
+> `In non-interactive mode, it only supports to use TABLEAU as value of sql-client.execution.result-mode`
+
+### 8.3 Iceberg REST Catalog 完整 DDL
+
+```sql
+-- 1. 创建 Catalog（容器每次重启可以 drop + create，因为数据在 Iceberg REST 后端存着）
+DROP CATALOG IF EXISTS iceberg_catalog;
+CREATE CATALOG iceberg_catalog WITH (
+  'type'='iceberg',
+  'catalog-type'='rest',
+  'uri'='http://iceberg-rest:8181',
+  'warehouse'='hdfs://namenode:9000/user/iceberg'
+);
+
+-- 2. 切到 Iceberg catalog 建库
+USE CATALOG iceberg_catalog;
+
+-- 坑：Flink SQL 用 CREATE DATABASE，不是 CREATE NAMESPACE！
+CREATE DATABASE IF NOT EXISTS demo;
+
+-- 3. 建 Iceberg 表
+CREATE TABLE IF NOT EXISTS demo.orders (
+  id INT, user_id INT, amount DECIMAL(10,2),
+  status VARCHAR(20), created_at TIMESTAMP(3),
+  PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+  'format-version' = '2',
+  'write.mode'     = 'upsert'    -- upsert = 主键 Merge，append = 纯追加
+);
+
+-- 4. 切回 default catalog 做别的
+-- 坑：不能 USE CATALOG default！default 是 Flink SQL 保留字
+-- 解法：USE CATALOG iceberg_catalog 之后，建 CDC Source 用 TEMPORARY TABLE（不依赖 catalog）
+```
+
+### 8.4 MySQL CDC Source（TEMPORARY TABLE 方式）
+
+**为什么用 TEMPORARY TABLE？** 因为 `CREATE TABLE mysql_orders ... WITH ('connector'='mysql-cdc')` 如果当前在 Iceberg catalog 下会报错：
+> `NoSuchNamespaceException: Cannot create table default.mysql_orders in catalog rest_backend`
+
+**解法**：`CREATE TEMPORARY TABLE` 不依赖当前 catalog，注册在 Flink 内存里。
+
+```sql
+USE CATALOG iceberg_catalog;
+
+-- TEMPORARY TABLE = 内存表，不走 catalog，不存 metadata
+CREATE TEMPORARY TABLE mysql_orders (
+  id INT, user_id INT, amount DECIMAL(10,2),
+  status VARCHAR(20), created_at TIMESTAMP(3),
+  PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+  'connector'            = 'mysql-cdc',
+  'hostname'             = 'mysql',
+  'port'                 = '3306',
+  'username'             = 'root',
+  'password'             = 'root123',
+  'database-name'        = 'lakehouse',
+  'table-name'           = 'orders',
+  'scan.startup.mode'    = 'initial'    -- 首次全量快照 + 后续 binlog
+);
+
+-- 查 CDC 数据
+SELECT * FROM mysql_orders;
+```
+
+### 8.5 CDC → Iceberg Sink 作业（完整 SQL 文件）
+
+保存为 `/tmp/flink-cdc-to-iceberg.sql`：
+
+```sql
+SET sql-client.execution.result-mode=TABLEAU;
+
+-- === Catalog + Sink ===
+DROP CATALOG IF EXISTS iceberg_catalog;
+CREATE CATALOG iceberg_catalog WITH (
+  'type'='iceberg', 'catalog-type'='rest',
+  'uri'='http://iceberg-rest:8181',
+  'warehouse'='hdfs://namenode:9000/user/iceberg'
+);
+USE CATALOG iceberg_catalog;
+CREATE DATABASE IF NOT EXISTS demo;
+CREATE TABLE IF NOT EXISTS demo.orders (
+  id INT, user_id INT, amount DECIMAL(10,2),
+  status VARCHAR(20), created_at TIMESTAMP(3),
+  PRIMARY KEY (id) NOT ENFORCED
+) WITH ('format-version'='2', 'write.mode'='upsert');
+
+-- === CDC Source ===
+CREATE TEMPORARY TABLE mysql_src (
+  id INT, user_id INT, amount DECIMAL(10,2),
+  status VARCHAR(20), created_at TIMESTAMP(3),
+  PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+  'connector'='mysql-cdc', 'hostname'='mysql', 'port'='3306',
+  'username'='root', 'password'='root123',
+  'database-name'='lakehouse', 'table-name'='orders',
+  'scan.startup.mode'='initial'
+);
+
+-- === 提交 CDC 作业 ===
+INSERT INTO iceberg_catalog.demo.orders
+SELECT id, user_id, amount, status, created_at FROM mysql_src;
+```
+
+### 8.6 执行 + 后台提交
+
+```bash
+# 前台跑（适合调试，看到作业 ID 后 Ctrl+C 取消）
+docker cp /tmp/flink-cdc-to-iceberg.sql flink-sql-client:/tmp/
+docker exec flink-sql-client bash -c '
+export KRB5CCNAME=/tmp/krb5cc_flink
+kinit -kt /etc/security/keytabs/flink.service.keytab flink/flinkjobmanager.lakehouse.com@LAKEHOUSE.COM
+export FLINK_CLASSPATH=/opt/flink/lib/extra/*
+export HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+export FLINK_ENV_JAVA_OPTS="-Djava.security.auth.login.config=/etc/security/flink-client-jaas.conf -Djavax.security.auth.useSubjectCredsOnly=false"
+/opt/flink/bin/sql-client.sh -f /tmp/flink-cdc-to-iceberg.sql
+'
+
+# 后台提交（作业在 JM 继续跑，不阻塞）
+docker exec -d flink-sql-client bash -c '
+export KRB5CCNAME=/tmp/krb5cc_flink
+kinit -kt /etc/security/keytabs/flink.service.keytab flink/flinkjobmanager.lakehouse.com@LAKEHOUSE.COM
+export FLINK_CLASSPATH=/opt/flink/lib/extra/*
+export HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+export FLINK_ENV_JAVA_OPTS="-Djava.security.auth.login.config=/etc/security/flink-client-jaas.conf -Djavax.security.auth.useSubjectCredsOnly=false"
+/opt/flink/bin/sql-client.sh -f /tmp/flink-cdc-to-iceberg.sql > /tmp/cdc.log 2>&1 &
+'
+```
+
+### 8.7 查看作业状态
+
+```bash
+# Flink JM REST API
+curl -s http://localhost:8081/jobs/overview | python3 -m json.tool
+
+# JM Web UI: http://localhost:8081/
+# 看 Flink SQL Client 输出
+docker exec flink-sql-client tail -20 /tmp/cdc.log
+
+# Iceberg REST Catalog 确认表
+curl -s http://localhost:8181/v1/namespaces/demo/tables
+curl -s http://localhost:8181/v1/namespaces/demo/tables/orders
+```
+
+### 8.8 完整踩坑清单（本次 Demo）
+
+| 坑 | 现象 | 解法 |
+|------|------|------|
+| `CREATE NAMESPACE` 语法不存在 | `ParseException: Encountered "NAMESPACE"` | 用 `CREATE DATABASE`（Flink 叫 database，Iceberg REST 叫 namespace，概念映射但语法不同）|
+| `USE CATALOG default` 报保留字错 | `ParseException: Encountered "default"` | `default` 是 Flink SQL 保留字，无法显式 USE。建临时表绕过 |
+| 非交互 SELECT 报 TABLEAU | `It only supports to use TABLEAU` | 每个 SQL 文件**首行必加** `SET sql-client.execution.result-mode=TABLEAU` |
+| `OperationManager is closed` | SELECT 流查询 timeout 后报错 | `sql-client.sh -f` 非交互模式对流查询有限制；后台 `-d` 提交 INSERT INTO 可以跑 |
+| Iceberg Catalog 下建 CDC Source 报错 | `NoSuchNamespaceException` | 用 `CREATE TEMPORARY TABLE`（不依赖 catalog namespace）|
+| CDC Source 注册后 SELECT 无数据 | 等 5-10s 让 initial scan 完成 | 实时 CD C 是异步的，SELECT 要等数据流入 |
+| Iceberg REST 建表后查不到数据 | 等 checkpoint commit | `write.mode=upsert` 要等 checkpoint interval（默认 10s）才提交数据文件 |
+| `result` / `info` 当列别名 | `ParseException: Encountered "result"` | 别用 Flink 保留字当列别名 |
+
+---
+
 ## 九、当前状态（截至最近一次验证）
 
 | 管道 | 状态 | 数据量 | 验证方式 |
@@ -449,5 +633,7 @@ docker exec kafka bash -c '
 
 ## 十、相关文档
 
+- Flink SQL 实操 + 踩坑：本文档 [第八章](#八flink-sql-client-实操指南踩坑笔记)
+- Kerberos 认证模式切换：`docs/APPENDIX_AUTH_SWITCH.md`
 - 部署问题排查：`docs/APPENDIX_TROUBLESHOOTING.md`
-- 部署说明：`docs/APPENDIX_DEPLOYMENT.md`
+- 全平台总览：`docs/LAKEHOUSE_OVERVIEW.md`
