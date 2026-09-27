@@ -214,7 +214,7 @@ klist  # 查看 ticket
 | **生产数据操作** | [APPENDIX_PRODUCTION_DATA_OPS.md](APPENDIX_PRODUCTION_DATA_OPS.md) | 存量导入、积压处理、HFile BulkLoad |
 | **MongoDB→HBase 迁移** | [LEARNING_ROADMAP.md#-case-study-bmongodb--hbase-存量迁移](LEARNING_ROADMAP.md) | Roadmap 高级 Case Study B（已合并） |
 | **存量迁移与集群规划** | [LEARNING_ROADMAP.md#-case-study-a存量迁移五步法--数仓分层设计](LEARNING_ROADMAP.md) | Roadmap 高级 Case Study A：五步法 + 选型决策树 + 架构图 + Kerberos 矩阵 |
-| **Kerberos Principal 清单** | [KERBEROS_PRINCIPALS.md](KERBEROS_PRINCIPALS.md) | 所有 principal + 用途 + 管理命令 |
+| **Kerberos Principal 清单** | [APPENDIX_KERBEROS.md](APPENDIX_KERBEROS.md) | 所有 principal + 用途 + 管理命令 |
 
 ---
 

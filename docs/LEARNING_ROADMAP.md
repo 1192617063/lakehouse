@@ -1034,7 +1034,7 @@ HBASE
 | **CDC 管道完整代码** | 练 2.1 想粘代码跑 | [docs/APPENDIX_CDC_PIPELINE.md](APPENDIX_CDC_PIPELINE.md) |
 | **Spark 离线作业完整 SQL** | 练 3.3 想粘 SQL / Spark Offline 方法论 | [docs/APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md](APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md) |
 | **Auth 双向切换** | auth 出问题 / 想切换 | [docs/APPENDIX_AUTH_SWITCH.md](APPENDIX_AUTH_SWITCH.md) |
-| **Kerberos 管理** | principal / keytab 管理 | [docs/KERBEROS_PRINCIPALS.md](KERBEROS_PRINCIPALS.md) |
+| **Kerberos 管理** | principal / keytab 管理 | [docs/APPENDIX_KERBEROS.md](APPENDIX_KERBEROS.md) |
 | **HBase 生产操作** | BulkLoad / Region 管理 | [docs/APPENDIX_PRODUCTION_DATA_OPS.md](APPENDIX_PRODUCTION_DATA_OPS.md) |
 | **故障排查** | 报 Kerberos 错 / classpath 错 / PermissionDenied | [docs/APPENDIX_TROUBLESHOOTING.md](APPENDIX_TROUBLESHOOTING.md) |
 | **DBeaver 连接** | Windows DBeaver Kerberos | [docs/APPENDIX_DBEAVER_CONNECTION_GUIDE.md](APPENDIX_DBEAVER_CONNECTION_GUIDE.md) |

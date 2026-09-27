@@ -11,7 +11,7 @@
 #   - 生成 keytab 到 conf/kerberos/keytabs/
 #   - 可选：更新 hbase-site.xml auth_to_local rules（如果 HBase 态）
 #
-# 参考：docs/KERBEROS_PRINCIPALS.md 「新增用户 Step-by-Step」
+# 参考：docs/APPENDIX_KERBEROS.md 「新增用户 Step-by-Step」
 # ============================================================
 set -euo pipefail
 
@@ -155,7 +155,7 @@ if [ "$ADD_MODE" = "pw" ]; then
   echo "   Password:  $PASSWORD"
 fi
 echo ""
-echo "📖 下一步：docs/KERBEROS_PRINCIPALS.md → 新增用户 Step-by-Step"
+echo "📖 下一步：docs/APPENDIX_KERBEROS.md → 新增用户 Step-by-Step"
 echo "   - 如果是新组件服务：kdc-init.sh 里补上 addprinc + ktadd 段"
 echo "   - 如果是用户：HBase 态可能要加 auth_to_local rules（让 HBase 能映射到 Unix 用户）"
 echo "   - 给该用户的 kinit: kinit -kt $KEYTAB_NAME $(basename "$PRINCIPAL")"
