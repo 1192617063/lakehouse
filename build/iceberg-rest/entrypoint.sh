@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-kinit -kt /etc/security/keytabs/iceberg.service.keytab iceberg/iceberg-rest.lakehouse.com@LAKEHOUSE.COM
-echo "Kerberos ticket obtained for iceberg/iceberg-rest.lakehouse.com@LAKEHOUSE.COM"
+kinit -kt /etc/security/keytabs/iceberg.service.keytab iceberg/icebergrest.lakehouse.com@LAKEHOUSE.COM
+echo "Kerberos ticket obtained for iceberg/icebergrest.lakehouse.com@LAKEHOUSE.COM"
 
 exec java \
   -Djava.security.krb5.conf=/etc/krb5.conf \

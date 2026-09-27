@@ -13,7 +13,7 @@ fi
 export KRB5CCNAME=/tmp/krb5cc_spark
 if [ -f /etc/security/keytabs/spark.service.keytab ]; then
     kinit -kt /etc/security/keytabs/spark.service.keytab \
-        spark/spark-master.lakehouse.com@LAKEHOUSE.COM \
+        spark/sparkmaster.lakehouse.com@LAKEHOUSE.COM \
         -c $KRB5CCNAME && echo "[spark-entrypoint] kinit OK" || \
         echo "[spark-entrypoint] WARN: kinit failed"
     # 确保 spark 用户也能访问 ticket cache

@@ -8,9 +8,13 @@
 | 项目 | 值 |
 |------|-----|
 | 服务器 IP（Linux 宿主机） | `172.24.64.215`（替换为你的实际 IP） |
-| Kerberos Realm | `LAKEHOUSE.COM` |
-| KDC 主机 | `kerberos`（端口 `88`） |
+| Kerberos Realm | `LAKEHOUSE.COM`（**全大写**） |
+| KDC 端口 | `88/tcp`（已映射到宿主机，Windows 可直接 `localhost:88`） |
+| Admin Server 端口 | `749/tcp` |
+| **HiveServer2 主机名** | **`hiveserver.lakehouse.com`**（**必须用这个 FQDN，不能用 IP！**） |
+| HiveServer2 Kerberos Service Principal | `hive/hiveserver.lakehouse.com@LAKEHOUSE.COM` |
 | 平台用户 | `lakehouse@LAKEHOUSE.COM` |
+| **平台用户密码** | **`lakehouse123`**（本次重置，可随时用 kadmin 改） |
 | 平台用户 keytab | `conf/kerberos/keytabs/lakehouse.keytab` |
 
 ## 二、连接清单总览
@@ -163,6 +167,7 @@ C:\kerberos\
 > - `kdc`：从 `kerberos` → `172.24.64.215:88`（你的服务器 IP + KDC 端口）
 > - `admin_server`：从 `kerberos` → `172.24.64.215:749`
 > - `default_ccache_name`：改成 `FILE:%TEMP%\krb5cc_%{uid}`，避免写入 `/tmp` 失败
+> - **新增 `hiveserver = LAKEHOUSE.COM`**（domain_realm 里，允许 GSSAPI 把短名 `hiveserver` 扩展成 `hiveserver.lakehouse.com`）
 >
 > **保存编码**：务必保存为 **ANSI 或 UTF-8 无 BOM**，不要带 BOM，否则 Java 解析可能出错。
 
@@ -220,27 +225,50 @@ DBeaver 通过 JVM 系统属性 `java.security.krb5.conf` 读取 Kerberos 配置
 启动 DBeaver 后，菜单 → 窗口 → 查看日志，搜索 `krb5`，确认没有加载错误。
 或临时把 `-Dsun.security.krb5.debug=true`，在 DBeaver 控制台/日志中看到 `Krb5Conf` 相关输出即表示加载成功。
 
-### 4.4 创建 Hive 连接（指定 keytab 路径）
+### 4.4 创建 Hive 连接（**主机名必须与 Kerberos principal 匹配**）
+
+> ⚠️ **重要**：JDBC URL 里的 host **必须**是 `hiveserver.lakehouse.com`，**不能**用 IP `172.24.64.215`。
+> Kerberos GSSAPI 握手时会用 JDBC URL 里的 host 构建 service principal：
+> - 用 IP 构建：`hive/172.24.64.215@LAKEHOUSE.COM` → KDC 里**没有**这个 principal → **GSS initiate failed**
+> - 用 hostname 构建：`hive/hiveserver.lakehouse.com@LAKEHOUSE.COM` → KDC 里**有** ✅
 
 DBeaver → 新建连接 → Apache Hive → 填写：
 
 | 配置项 | 值 |
 |--------|-----|
-| 主机 | `172.24.64.215` |
+| **主机（Host）** | **`hiveserver.lakehouse.com`**（不能是 IP！） |
 | 端口 | `21066` |
 | 数据库/模式 | `default` |
 | 认证（Authentication） | `Kerberos` |
-| Principal | `hive/hiveserver.lakehouse.com@LAKEHOUSE.COM` |
+| Principal（Service） | `hive/hiveserver.lakehouse.com@LAKEHOUSE.COM` |
+| User principal（客户端） | `lakehouse@LAKEHOUSE.COM` |
+
+#### 两种认证方式（二选一）
+
+**方式 A — 密码登录（推荐，简单）**
+
+| 字段 | 值 |
+|---|---|
+| User principal | `lakehouse@LAKEHOUSE.COM` |
+| Password | `lakehouse123` |
+
+DBeaver 会用密码向 KDC 请求 TGT → 拿到 TGT 后走 GSSAPI 握手。
+
+**方式 B — keytab 登录（适合自动化）**
+
+| 字段 | 值 |
+|---|---|
 | Keytab | `C:\kerberos\lakehouse.keytab` |
 | User principal | `lakehouse@LAKEHOUSE.COM` |
 
 > **各字段含义**：
-> - **Principal**：Hive 服务端的 Kerberos 主体，格式为 `服务名/主机名@REALM`，必须与服务端 `hive-site.xml` 中 `hive.server2.authentication.kerberos.principal` 一致
-> - **Keytab**：Windows 本地 keytab 文件的**绝对路径**，用反斜杠 `\`
-> - **User principal**：使用 keytab 的用户主体，必须与 keytab 中的 principal 一致（本环境为 `lakehouse@LAKEHOUSE.COM`）
->
-> **JDBC URL**（DBeaver 自动生成，无需手动输入）：
-> `jdbc:hive2://172.24.64.215:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM`
+> - **Principal（Service）**：Hive 服务端的 Kerberos 主体，格式 `服务名/主机名@REALM`，必须与 `hive-site.xml` 中 `hive.server2.authentication.kerberos.principal` **完全一致**
+> - **User principal**：你的客户端身份，DBeaver 用它向 KDC 认证（密码或 keytab）
+> - DBeaver 自动生成的 JDBC URL 应该是：
+>   ```
+>   jdbc:hive2://hiveserver.lakehouse.com:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM
+>   ```
+>   如果自动生成的 URL 里还是 IP，**手动改**成 hostname 再连接！
 
 #### （可选）手动用 keytab 验证认证
 
@@ -253,14 +281,24 @@ DBeaver → 新建连接 → Apache Hive → 填写：
 
 能看到票据则说明 keytab 和 KDC 连接正常，DBeaver 连接失败则是 DBeaver 自身配置问题。
 
-### 4.5 hosts 配置（可选但推荐）
+### 4.5 hosts 配置（**必须**）
 
-为避免 Kerberos 反向 DNS 解析问题，在 Windows 的 `C:\Windows\System32\drivers\etc\hosts` 中添加：
+GSSAPI 用 hostname 构建 service principal，但 Windows 无法解析 Docker 内部 DNS（`hiveserver.lakehouse.com`），必须在 `C:\Windows\System32\drivers\etc\hosts` 中添加（管理员权限打开记事本）：
 
 ```
-172.24.64.215  hiveserver.lakehouse.com
-172.24.64.215  kerberos
+172.24.64.215  hiveserver.lakehouse.com  hiveserver
+172.24.64.215  hivemetastore.lakehouse.com  hivemetastore
+172.24.64.215  kerberos.lakehouse.com  kerberos
+172.24.64.215  namenode.lakehouse.com  namenode
+172.24.64.215  spark-master.lakehouse.com  spark-master
+172.24.64.215  flink-jobmanager.lakehouse.com  flink-jobmanager
+172.24.64.215  trino.lakehouse.com  trino
 ```
+
+> **DNS 连通性测试**（PowerShell）：
+> ```powershell
+> ping hiveserver.lakehouse.com   # 应该解析到 172.24.64.215
+> ```
 
 ## 五、验证连接
 
@@ -337,6 +375,30 @@ SELECT * FROM cdc_demo.orders LIMIT 5;
 - 必须**完全退出** DBeaver 进程（任务管理器确认）再重新打开
 - 便携版和安装版的 `dbeaver.ini` 位置不同，参考 4.3 节
 
+### Q9: `GSS initiate failed` / `GSSException: No valid credentials provided`（高频！）
+
+**根因**：JDBC URL 里的 host 是 **IP**（如 `172.24.64.215`），不是 hostname。
+Kerberos GSSAPI 会用 JDBC URL 里的 host 构建 service principal：`hive/172.24.64.215@LAKEHOUSE.COM`，
+但 KDC 里只有 `hive/hiveserver.lakehouse.com@LAKEHOUSE.COM` 这个 principal，找不到 → GSS 握手失败。
+
+**解决**：
+1. DBeaver 连接的 **Host 字段**必须填 `hiveserver.lakehouse.com`，不能填 IP
+2. 确认 Windows hosts 文件已添加（见 4.5 节）
+3. 如果 DBeaver 自动生成的 JDBC URL 里还是 IP，手动改成 hostname：
+   ```
+   jdbc:hive2://hiveserver.lakehouse.com:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM
+   ```
+
+### Q10: `Principal unknown` / `KDC has no such principal`
+
+- 用户 principal 拼写错误：确认是 `lakehouse@LAKEHOUSE.COM`（realm 全大写）
+- 刚重置过密码后 KDC 已同步，直接输入新密码即可
+- 用 kadmin 检查所有 principal：
+  ```bash
+  docker exec kerberos kadmin -p admin/admin -w admin123 -q 'listprincs'
+  # 应该看到 hive/hiveserver.lakehouse.com@LAKEHOUSE.COM
+  ```
+
 ## 七、连接速查表
 
 | 数据库 | 连接 URL 模板 |
@@ -346,4 +408,4 @@ SELECT * FROM cdc_demo.orders LIMIT 5;
 | MongoDB | `mongodb://root:root123@172.24.64.215:27017/?authSource=admin` |
 | Doris | `jdbc:mysql://172.24.64.215:9030/` |
 | Trino | `jdbc:trino://172.24.64.215:8085` |
-| Hive | `jdbc:hive2://172.24.64.215:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM` |
+| **Hive Server2（Kerberos）** | **`jdbc:hive2://hiveserver.lakehouse.com:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM`** ⚠️ 不能用 IP！ |

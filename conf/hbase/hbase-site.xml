@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <!-- ========== Hadoop Kerberos 属性（HBase 会从 hbase-site.xml 读取作为 Hadoop conf 合并）========== -->
+  <!-- 这是关键修复：Hadoop 2.10.2 的 Configuration 默认不读 HADOOP_CONF_DIR env，
+       必须把 kerberos 属性写到 HBase 启动时一定会加载的 hbase-site.xml 里 -->
+  <property>
+    <name>hadoop.security.authentication</name>
+    <value>kerberos</value>
+  </property>
+  <property>
+    <name>hadoop.security.authorization</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>hadoop.security.auth_to_local</name>
+    <value>RULE:[1:$1@$0](.*@LAKEHOUSE\.COM$s/.*/$1/)
+    RULE:[2:$1@$0](.*@LAKEHOUSE\.COM$s/.*/$1/)
+    DEFAULT</value>
+  </property>
+
+  <!-- HBase 使用 HDFS 作为底层存储 -->
+  <property>
+    <name>hbase.rootdir</name>
+    <value>hdfs://namenode:9000/hbase</value>
+  </property>
+  <property>
+    <name>hbase.cluster.distributed</name>
+    <value>true</value>
+  </property>
+  <property>
+    <name>hbase.zookeeper.quorum</name>
+    <value>zookeeper</value>
+  </property>
+  <property>
+    <name>hbase.zookeeper.property.clientPort</name>
+    <value>2181</value>
+  </property>
+  <property>
+    <name>hbase.zookeeper.property.dataDir</name>
+    <value>/opt/hbase/zookeeper/data</value>
+  </property>
+
+  <!-- Kerberos 认证（Hadoop 3.3.6 jars 替换后启用）-->
+  <property>
+    <name>hbase.security.authentication</name>
+    <value>kerberos</value>
+  </property>
+  <property>
+    <name>hbase.security.authorization</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>hbase.master.kerberos.principal</name>
+    <value>hbase/hbasemaster.lakehouse.com@LAKEHOUSE.COM</value>
+  </property>
+  <property>
+    <name>hbase.master.keytab.file</name>
+    <value>/etc/security/keytabs/hbase.service.keytab</value>
+  </property>
+  <property>
+    <name>hbase.regionserver.kerberos.principal</name>
+    <value>hbase/hbaseregionserver.lakehouse.com@LAKEHOUSE.COM</value>
+  </property>
+  <property>
+    <name>hbase.regionserver.keytab.file</name>
+    <value>/etc/security/keytabs/hbase.service.keytab</value>
+  </property>
+
+  <!-- Web UI 端口 -->
+  <property>
+    <name>hbase.master.info.port</name>
+    <value>16010</value>
+  </property>
+  <property>
+    <name>hbase.regionserver.port</name>
+    <value>16020</value>
+  </property>
+  <property>
+    <name>hbase.regionserver.info.port</name>
+    <value>16030</value>
+  </property>
+  <property>
+    <name>hbase.master.hostname</name>
+    <value>hbasemaster</value>
+  </property>
+  <property>
+    <name>hbase.regionserver.hostname</name>
+    <value>hbaseregionserver</value>
+  </property>
+</configuration>

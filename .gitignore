@@ -29,3 +29,11 @@ logs/
 
 # === Kerberos keytabs（凭据，永不入库）===
 conf/kerberos/keytabs/
+
+# === Release 打包产物 ===
+release/
+
+# === Docker build tarballs（体积大，用户从 release 包获取）===
+build/hbase/*.tar.gz
+build/flink/*.tar.gz
+build/spark/*.tar.gz

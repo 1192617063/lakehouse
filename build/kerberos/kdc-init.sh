@@ -79,13 +79,24 @@ else
     echo "Keytab ${HIVE_KEYTAB} already exists, skipping key rotation"
 fi
 
-create_and_export "flink/flink-jobmanager.lakehouse.com@${REALM}" "${KEYTAB_DIR}/flink.service.keytab"
+create_and_export "flink/flinkjobmanager.lakehouse.com@${REALM}" "${KEYTAB_DIR}/flink.service.keytab"
 create_and_export "kafka/kafka.lakehouse.com@${REALM}" "${KEYTAB_DIR}/kafka.service.keytab"
-create_and_export "spark/spark-master.lakehouse.com@${REALM}" "${KEYTAB_DIR}/spark.service.keytab"
-create_and_export "iceberg/iceberg-rest.lakehouse.com@${REALM}" "${KEYTAB_DIR}/iceberg.service.keytab"
+create_and_export "spark/sparkmaster.lakehouse.com@${REALM}" "${KEYTAB_DIR}/spark.service.keytab"
+create_and_export "iceberg/icebergrest.lakehouse.com@${REALM}" "${KEYTAB_DIR}/iceberg.service.keytab"
 create_and_export "trino/trino.lakehouse.com@${REALM}" "${KEYTAB_DIR}/trino.service.keytab"
-create_and_export "yarn/resource-manager.lakehouse.com@${REALM}" "${KEYTAB_DIR}/rm.service.keytab"
-create_and_export "yarn/node-manager.lakehouse.com@${REALM}" "${KEYTAB_DIR}/nm.service.keytab"
+create_and_export "yarn/resourcemanager.lakehouse.com@${REALM}" "${KEYTAB_DIR}/rm.service.keytab"
+create_and_export "yarn/nodemanager.lakehouse.com@${REALM}" "${KEYTAB_DIR}/nm.service.keytab"
+
+# HBase keytab：master + regionserver 两个 principal（同一个 keytab）
+HBASE_KEYTAB="${KEYTAB_DIR}/hbase.service.keytab"
+if [ ! -f "${HBASE_KEYTAB}" ]; then
+    kadmin.local -q "addprinc -randkey hbase/hbasemaster.lakehouse.com@${REALM}" 2>/dev/null || true
+    kadmin.local -q "addprinc -randkey hbase/hbaseregionserver.lakehouse.com@${REALM}" 2>/dev/null || true
+    kadmin.local -q "ktadd -k ${HBASE_KEYTAB} hbase/hbasemaster.lakehouse.com@${REALM} hbase/hbaseregionserver.lakehouse.com@${REALM}" 2>/dev/null || true
+    chmod 644 "${HBASE_KEYTAB}" 2>/dev/null || true
+else
+    echo "Keytab ${HBASE_KEYTAB} already exists, skipping key rotation"
+fi
 
 kadmin.local -q "addprinc -randkey lakehouse@${REALM}" 2>/dev/null || true
 if [ ! -f "${KEYTAB_DIR}/lakehouse.keytab" ]; then

@@ -10,10 +10,10 @@
   </property>
   <property>
     <name>mapreduce.jobhistory.address</name>
-    <value>resource-manager.lakehouse.com:10020</value>
+    <value>resourcemanager.lakehouse.com:10020</value>
   </property>
   <property>
     <name>mapreduce.jobhistory.webapp.address</name>
-    <value>resource-manager.lakehouse.com:19888</value>
+    <value>resourcemanager.lakehouse.com:19888</value>
   </property>
 </configuration>

@@ -1,4 +1,4 @@
-jobmanager.rpc.address: flink-jobmanager
+jobmanager.rpc.address: flinkjobmanager
 jobmanager.rpc.port: 6123
 jobmanager.memory.process.size: 4096m
 
@@ -6,7 +6,7 @@ taskmanager.numberOfTaskSlots: 8
 taskmanager.memory.process.size: 4096m
 taskmanager.memory.managed.fraction: 0.4
 
-rest.address: flink-jobmanager
+rest.address: flinkjobmanager
 rest.port: 8081
 
 state.backend: rocksdb
@@ -32,7 +32,7 @@ table.catalog-store.file.path: /opt/flink/conf/catalog-store
 
 security.kerberos.login.use-ticket-cache: false
 security.kerberos.login.keytab: /etc/security/keytabs/flink.service.keytab
-security.kerberos.login.principal: flink/flink-jobmanager.lakehouse.com@LAKEHOUSE.COM
+security.kerberos.login.principal: flink/flinkjobmanager.lakehouse.com@LAKEHOUSE.COM
 security.kerberos.login.contexts: Client,KafkaClient
 # Flink standalone 模式下 JM + TM 都用 keytab 做 Kerberos 登录
 # 自己持有 TGT 不需要 delegation token（delegation token 是给 YARN container 里无 TGT 进程用的）

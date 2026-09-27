@@ -6,7 +6,7 @@
 
 set -e
 
-KRB_PRINCIPAL="flink/flink-jobmanager.lakehouse.com@LAKEHOUSE.COM"
+KRB_PRINCIPAL="flink/flinkjobmanager.lakehouse.com@LAKEHOUSE.COM"
 KRB_KEYTAB="/etc/security/keytabs/flink.service.keytab"
 FLINK_HOME="/opt/flink"
 

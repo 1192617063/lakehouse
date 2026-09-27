@@ -39,7 +39,7 @@ services:
   yarn-resource-manager:
     image: ${HADOOP_IMAGE}
     container_name: yarn-resource-manager
-    hostname: resource-manager.lakehouse.com
+    hostname: resourcemanager.lakehouse.com
     user: root
     command: ["yarn", "resourcemanager"]
     environment:
@@ -59,7 +59,7 @@ services:
   yarn-node-manager:
     image: ${HADOOP_IMAGE}
     container_name: yarn-node-manager
-    hostname: node-manager.lakehouse.com
+    hostname: nodemanager.lakehouse.com
     user: root
     command: ["yarn", "nodemanager"]
     environment:
@@ -161,6 +161,79 @@ services:
     depends_on: [namenode, mysql]
     mem_limit: 1g
 
+  zookeeper:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/bitnami/zookeeper:3.9
+    container_name: zookeeper
+    hostname: zookeeper.lakehouse.com
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+      ZOO_AUTOPURGE_PURGEINTERVAL: "1"
+      ZOO_AUTOPURGE_SNAPSHOTRETAINCOUNT: "3"
+    ports:
+      - "2181:2181"
+    volumes:
+      - zk_data:/bitnami/zookeeper
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.62
+    mem_limit: 512m
+
+  hbase-master:
+    image: lakehouse-hbase:2.5.3
+    build:
+      context: ./build/hbase
+    container_name: hbase-master
+    hostname: hbasemaster.lakehouse.com
+    user: root
+    command: ["bash", "-c", "mkdir -p /opt/hbase/zookeeper/data && kinit -kt /etc/security/keytabs/hbase.service.keytab hbase/hbasemaster.lakehouse.com@LAKEHOUSE.COM && /opt/hbase/bin/hbase master start"]
+    environment:
+      HBASE_HOME: /opt/hbase
+      JAVA_HOME: /opt/java/openjdk
+      JAVA_TOOL_OPTIONS: "-Djava.security.krb5.conf=/etc/krb5.conf -Djavax.security.auth.useSubjectCredsOnly=false"
+    ports:
+      - "16010:16010"
+      - "9090:9090"
+    depends_on: [namenode, zookeeper]
+    volumes:
+      # 关键：kerberos 版 core-site.xml 放到 HBase classpath 上 → Hadoop Configuration 自动加载
+      - ./conf/hadoop/core-site.xml:/opt/hbase/conf/core-site.xml:ro
+      - ./conf/hadoop/hdfs-site.xml:/opt/hbase/conf/hdfs-site.xml:ro
+      - ./conf/hadoop/yarn-site.xml:/opt/hbase/conf/yarn-site.xml:ro
+      - ./conf/hadoop/mapred-site.xml:/opt/hbase/conf/mapred-site.xml:ro
+      - ./conf/hbase/hbase-site.xml:/opt/hbase/conf/hbase-site.xml:ro
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.63
+    mem_limit: 3g
+
+  hbase-regionserver:
+    image: lakehouse-hbase:2.5.3
+    container_name: hbase-regionserver
+    hostname: hbaseregionserver.lakehouse.com
+    user: root
+    command: ["bash", "-c", "kinit -kt /etc/security/keytabs/hbase.service.keytab hbase/hbaseregionserver.lakehouse.com@LAKEHOUSE.COM && /opt/hbase/bin/hbase regionserver start"]
+    environment:
+      HBASE_HOME: /opt/hbase
+      JAVA_HOME: /opt/java/openjdk
+      JAVA_TOOL_OPTIONS: "-Djava.security.krb5.conf=/etc/krb5.conf -Djavax.security.auth.useSubjectCredsOnly=false"
+    ports:
+      - "16020:16020"
+    depends_on: [hbase-master, zookeeper]
+    volumes:
+      - ./conf/hadoop/core-site.xml:/opt/hbase/conf/core-site.xml:ro
+      - ./conf/hadoop/hdfs-site.xml:/opt/hbase/conf/hdfs-site.xml:ro
+      - ./conf/hadoop/yarn-site.xml:/opt/hbase/conf/yarn-site.xml:ro
+      - ./conf/hadoop/mapred-site.xml:/opt/hbase/conf/mapred-site.xml:ro
+      - ./conf/hbase/hbase-site.xml:/opt/hbase/conf/hbase-site.xml:ro
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.64
+    mem_limit: 3g
+
   kafka:
     image: ${KAFKA_IMAGE}
     container_name: kafka
@@ -203,7 +276,7 @@ services:
       args:
         FLINK_BASE_IMAGE: ${FLINK_BASE_IMAGE}
     container_name: flink-jobmanager
-    hostname: flink-jobmanager.lakehouse.com
+    hostname: flinkjobmanager.lakehouse.com
     command: jobmanager
     environment:
       FLINK_CLASSPATH: /opt/flink/lib/extra/*
@@ -462,7 +535,8 @@ services:
         ipv4_address: 172.30.80.60
     mem_limit: 1g
 
-volumes: {}
+volumes:
+  zk_data:
 
 networks:
   lakehouse-net:

@@ -623,3 +623,239 @@ docker exec flink-jobmanager bash -c '
 kinit -kt /etc/security/keytabs/flink.service.keytab flink/flink-jobmanager.lakehouse.com@LAKEHOUSE.COM
 '
 ```
+
+---
+
+## 十三、Kerberos GSSAPI 主机名匹配问题
+
+### 13.1 `hive.metastore.uris` 必须用 FQDN 且匹配 KDC principal hostname
+
+**现象**：Flink / Spark / Hive 客户端访问 Hive Metastore 报 `GSS initiate failed`，但直接 `kinit` 是好的。
+
+**根因**：GSSAPI 构建 service principal 时用的是 JDBC URI 里的 hostname 部分。KDC 里有 `hive/hivemetastore.lakehouse.com@LAKEHOUSE.COM`（注意 **没有** Docker 网络短名里的横杠），但：
+- `thrift://hive-metastore:9083` → 构建 `hive/hive-metastore.lakehouse.com@LAKEHOUSE.COM`（横杠错配） → **KDC 找不到**
+- `thrift://hivemetastore.lakehouse.com:9083` → 构建 `hive/hivemetastore.lakehouse.com@LAKEHOUSE.COM` → **正确匹配** ✅
+
+**解决方案**：所有 hive.metastore.uris、Flink paimon/hive catalog uri、Spark paimon uri 都改成 FQDN：
+```xml
+<name>hive.metastore.uris</name>
+<value>thrift://hivemetastore.lakehouse.com:9083</value>
+```
+
+### 13.2 DBeaver 连接 Hive `GSS initiate failed`（高频）
+
+**现象**：DBeaver 报 `Could not open client transport with JDBC Uri: jdbc:hive2://172.24.64.215:21066/default;principal=...: GSS initiate failed`
+
+**根因**：JDBC URL 里的 host 是 **IP**（`172.24.64.215`），不是 hostname。GSSAPI 用 IP 构建 service principal `hive/172.24.64.215@LAKEHOUSE.COM` → KDC 找不到。
+
+**解决方案**：JDBC URL 必须用 hostname（见 DBEAVER_CONNECTION_GUIDE.md 第 4.4 节）：
+```
+jdbc:hive2://hiveserver.lakehouse.com:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM
+```
+同时在 Windows `C:\Windows\System32\drivers\etc\hosts` 加映射。
+
+---
+
+## 十四、Spark YARN 模式问题
+
+### 14.1 Spark standalone 无法获取 delegation token
+
+**现象**：Spark standalone distributed 模式下，executor 访问 HDFS 报 `No valid credentials provided`。
+
+**根因**：Spark standalone executor 不原生参与 Kerberos delegation token 分发机制。Driver 把 token 序列化传递给 executor 不可靠。
+
+**解决方案**：切到 **YARN yarn-client 模式**（commit `ba655a5`）。Spark-submit 命令：
+```bash
+spark-submit --master yarn --deploy-mode client \
+  --conf spark.kerberos.keytab=/etc/security/keytabs/spark.service.keytab \
+  --conf spark.kerberos.principal=spark/spark-master.lakehouse.com@LAKEHOUSE.COM \
+  your-app.py
+```
+YARN ResourceManager + NodeManager 原生处理 delegation token 生成和分发。
+
+### 14.2 KryoSerializer + spark.yarn.archive → StreamCorruptedException / EOFException
+
+**现象**：Spark YARN 作业 executor 启动时报 `java.io.StreamCorruptedException` 或 `EOFException`。
+
+**根因**：Spark 内部 bug（已在多版本重现）。Kryo 序列化器和 `spark.yarn.archive`（预打包 JAR 从 HDFS 下载）组合后，classloader 加载的类版本不一致导致 Kryo 反序列化失败。
+
+**解决方案**：**不要用 KryoSerializer**，用 JavaSerializer：
+```properties
+# spark-defaults.conf
+# spark.serializer org.apache.spark.serializer.KryoSerializer   ← 注释掉
+spark.yarn.archive hdfs://namenode:9000/user/spark/share/spark-jars.tar.gz
+```
+`spark.yarn.archive` 的 JAR 包打包命令（首次）：
+```bash
+# 在 spark 容器里
+cd /opt/bitnami/spark
+tar -czf /tmp/spark-jars.tar.gz jars/ extra-jars/
+hdfs dfs -put -f /tmp/spark-jars.tar.gz /user/spark/share/
+```
+
+---
+
+## 十五、Flink Kerberos 问题
+
+### 15.1 `security.delegation.tokens.enabled: true` 导致 JM NPE
+
+**现象**：Flink JobManager 启动时报 `NullPointerException`，堆栈里有 `HiveServer2DelegationTokenProvider`。
+
+**根因**：Flink standalone 模式下，JM + TM 都用 keytab 本地 kinit 拿 TGT，**自己持有有效的 Kerberos 票据**，不需要 delegation token。Delegation token 是给 YARN container 里无法 kinit 的进程准备的。Flink 1.19 standalone 模式下这个功能不完整（NPE）。
+
+**解决方案**：**必须关掉** delegation tokens：
+```yaml
+security.delegation.tokens.enabled: false
+```
+JM/TM 直接用 keytab 本地 `kinit` 拿 TGT 即可。
+
+### 15.2 Flink SQL Client embedded 模式 JVM Subject 没有 TGT
+
+**现象**：Flink SQL Client 执行时报 `GSSException: No valid credentials provided`，但 JM/TM 日志里 kinit 成功。
+
+**根因**：Flink SQL Client 以 **embedded 模式**启动独立 JVM，不继承 JM 的 ClusterEntrypoint（走 SecurityUtils.install），这个独立 JVM 的 Subject 里没有 Kerberos TGT。
+
+**解决方案**：用 **SQL Gateway** 远程连接（Gateway 进程在 JM 内启动，继承 JM 的 UGI subject）：
+```bash
+# JM 里启动 SQL Gateway（只需启动一次，持久运行）
+docker exec flink-jobmanager bash -c '
+kinit -kt /etc/security/keytabs/flink.service.keytab flink/flink-jobmanager.lakehouse.com@LAKEHOUSE.COM
+# SQL Gateway 默认在 JM 的 8083 端口启动（flink-conf.yaml sql-gateway.endpoint.rest.port）
+/opt/flink/bin/sql-gateway.sh start -p 8083
+'
+
+# 用 SQL Client 远程连 Gateway（不 embedded）
+docker exec flink-sql-client bash -c '
+/opt/flink/bin/sql-client.sh gateway \
+  --endpoint http://flink-jobmanager:8083 \
+  -f /opt/flink/conf/sql-client-init.sql
+'
+```
+> **flink-conf.yaml 必须配置**：
+> ```yaml
+> sql-gateway.endpoint.rest.address: 0.0.0.0
+> sql-gateway.endpoint.rest.port: 8083
+> ```
+
+### 15.3 `org.apache.hadoop.` 不能在 Flink parent-first 里！
+
+**现象**：Flink JobManager 报各种 Kerberos UGI 不兼容错误，或 Flink SQL Client 报 GSS initiate failed。
+
+**根因**：Flink 自己打包了 **shaded Hadoop 3.7.0**（`flink-shaded-hadoop3-uber-blink-3.7.0.jar`）。如果把外部 Hadoop 3.3.6 加进 `classloader.parent-first-patterns.additional`，会覆盖 shaded 版本 → UGI 类版本不兼容。
+
+**解决方案**：parent-first 里**只保留 Kerberos 相关需要的包**，排除 Hadoop：
+```yaml
+classloader.resolve-order: parent-first
+classloader.parent-first-patterns.additional: org.apache.hive.;org.apache.iceberg.;org.apache.paimon.
+# ❌ 错误：classloader.parent-first-patterns.additional: org.apache.hadoop.;org.apache.hive.;...
+```
+
+---
+
+## 十六、Hive Tez 相关问题
+
+### 16.1 Tez 0.10.2 不兼容 Hive 3.1.3
+
+**现象**：HiveServer2 启动后卡住，只有 SLF4J 日志，无端口监听。
+
+**根因**：Hive 3.1.3 官方依赖 Tez **0.9.1**（pom.xml 明确），Tez 0.10.2 API 不兼容导致 `DAGAppMaster` 加载失败。
+
+**解决方案**：换回 Tez 0.9.1（清理版，见 16.2）。
+
+### 16.2 Tez 0.9.1 自带 Hadoop 2.7 jar 冲突
+
+**现象**：HiveServer2 或 Tez AM 启动报 `ClassNotFoundException` / `NoSuchMethodError`（Hadoop 版本冲突）。
+
+**根因**：Tez 0.9.1 的 `lib/` 目录捆绑了两个 Hadoop 2.7 jar：`hadoop-mapreduce-client-core-2.7.0.jar` 和 `hadoop-mapreduce-client-common-2.7.0.jar`。
+
+**解决方案**：删掉这两个 2.7 jar，保留 shim：
+```bash
+cd tez-0.9.1/lib/
+rm -f hadoop-mapreduce-client-core-2.7.0.jar
+rm -f hadoop-mapreduce-client-common-2.7.0.jar
+# 保留：hadoop-shim-0.9.1.jar, hadoop-shim-2.7-0.9.1.jar
+```
+清理后的 tez 重新打包上传 HDFS：
+```bash
+tar -czf tez-0.9.1-clean.tar.gz tez-0.9.1/
+hdfs dfs -put -f tez-0.9.1-clean.tar.gz /user/tez/tez.tar.gz
+```
+
+### 16.3 HiveServer2 entrypoint.sh 自动把 TEZ_HOME 加进 classpath
+
+**现象**：即使 Tez jar 已清理，HiveServer2 启动时仍卡住（只有 SLF4J 日志，进程存在但端口不监听）。
+
+**根因**：`apache/hive:3.1.3` 镜像的 entrypoint.sh（约第 50 行）只在 `SERVICE_NAME == hiveserver2` 分支才 `export HADOOP_CLASSPATH=$TEZ_HOME/*:$TEZ_HOME/lib/*:...`。Tez 0.9.1 捆绑的 Hadoop 2.7 jar 被注入 classpath → 版本冲突。
+
+**解决方案**：**让 entrypoint 的 glob 不匹配任何 jar**：
+```yaml
+# docker-compose.yaml hive-server & hive-metastore 的 environment:
+TEZ_HOME: /dev/null
+```
+`/dev/null/*` glob 不匹配任何文件 → Tez 不进 classpath。也可以挂载一个空目录覆盖镜像内置的 `/opt/tez`（compose 里已经这么做了：`./lib/empty:/opt/tez:ro`）。
+
+---
+
+## 十七、Hive Metastore Kerberos 问题
+
+### 17.1 Metastore DBS/TBLS 等表不存在
+
+**现象**：`Required table missing: "DBS"` 或 `"TBLS"`。
+
+**根因**：之前 DROP DATABASE 了 MySQL 里的 hive_metastore 但没重建 schema。
+
+**解决方案**：
+```bash
+docker exec mysql mysql -uroot -proot123 -e "
+DROP DATABASE hive_metastore;
+CREATE DATABASE hive_metastore CHARACTER SET utf8mb4;
+GRANT ALL ON hive_metastore.* TO 'hive'@'%';
+FLUSH PRIVILEGES;
+"
+# 用 hive 镜像里的 schematool（单独 docker run，挂载 krb5.conf + mysql-connector）
+docker run --rm --network lakehouse-net \
+  -v $(pwd)/conf/hive:/opt/hive/custom-conf:ro \
+  -v $(pwd)/conf/hadoop/core-site.xml:/opt/hive/conf/core-site.xml:ro \
+  -v $(pwd)/lib/mysql/mysql-connector-j-8.4.0.jar:/opt/hive/lib/mysql-connector-j-8.4.0.jar:ro \
+  -v $(pwd)/lib/empty:/opt/tez:ro \
+  apache/hive:3.1.3 \
+  schematool -dbType mysql -initSchema 2>&1 | tail -5
+```
+
+### 17.2 Hive Metastore SASL Kerberos 没开
+
+**现象**：Hive 客户端（Spark/Flink）访问 Metastore 报 `GSS initiate failed` 或 Thrift 连接被拒绝。
+
+**解决方案**：确认 hive-site.xml 里这些 property：
+```xml
+<property>
+  <name>hive.metastore.sasl.enabled</name>
+  <value>true</value>
+</property>
+<property>
+  <name>hive.metastore.kerberos.principal</name>
+  <value>hive/hivemetastore.lakehouse.com@LAKEHOUSE.COM</value>
+</property>
+```
+
+---
+
+## 十八、Kerberos 平台用户管理
+
+### 18.1 重置用户密码
+
+```bash
+# 修改 lakehouse 平台用户密码
+docker exec kerberos kadmin -p admin/admin -w admin123 \
+  -q 'change_password -pw newpassword123 lakehouse@LAKEHOUSE.COM'
+```
+
+### 18.2 列出所有 principal
+
+```bash
+docker exec kerberos kadmin -p admin/admin -w admin123 -q 'listprincs'
+```
+
+### 18.3 创建新用户 + keytab（自动化）
+
+见 TROUBLESHOOTING.md 第 3.4 节（新增认证用户）。

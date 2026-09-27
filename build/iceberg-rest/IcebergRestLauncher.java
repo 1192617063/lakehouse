@@ -8,7 +8,7 @@ public class IcebergRestLauncher {
         conf.set("hadoop.security.authentication", "kerberos");
         UserGroupInformation.setConfiguration(conf);
 
-        String principal = "iceberg/iceberg-rest.lakehouse.com@LAKEHOUSE.COM";
+        String principal = "iceberg/icebergrest.lakehouse.com@LAKEHOUSE.COM";
         String keytab = "/etc/security/keytabs/iceberg.service.keytab";
         UserGroupInformation.loginUserFromKeytab(principal, keytab);
 

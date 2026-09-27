@@ -3,11 +3,11 @@
   <!-- === RM / NM 基础配置 === -->
   <property>
     <name>yarn.resourcemanager.hostname</name>
-    <value>resource-manager.lakehouse.com</value>
+    <value>resourcemanager.lakehouse.com</value>
   </property>
   <property>
     <name>yarn.nodemanager.hostname</name>
-    <value>node-manager.lakehouse.com</value>
+    <value>nodemanager.lakehouse.com</value>
   </property>
   <property>
     <name>yarn.nodemanager.local-dirs</name>
@@ -35,7 +35,7 @@
   <!-- RM Kerberos -->
   <property>
     <name>yarn.resourcemanager.principal</name>
-    <value>yarn/resource-manager.lakehouse.com@LAKEHOUSE.COM</value>
+    <value>yarn/resourcemanager.lakehouse.com@LAKEHOUSE.COM</value>
   </property>
   <property>
     <name>yarn.resourcemanager.keytab</name>
@@ -45,7 +45,7 @@
   <!-- NM Kerberos -->
   <property>
     <name>yarn.nodemanager.principal</name>
-    <value>yarn/node-manager.lakehouse.com@LAKEHOUSE.COM</value>
+    <value>yarn/nodemanager.lakehouse.com@LAKEHOUSE.COM</value>
   </property>
   <property>
     <name>yarn.nodemanager.keytab</name>
@@ -55,11 +55,11 @@
   <!-- NM Web UI Kerberos -->
   <property>
     <name>yarn.nodemanager.webapp.address</name>
-    <value>node-manager.lakehouse.com:8042</value>
+    <value>nodemanager.lakehouse.com:8042</value>
   </property>
   <property>
     <name>yarn.resourcemanager.webapp.address</name>
-    <value>resource-manager.lakehouse.com:8088</value>
+    <value>resourcemanager.lakehouse.com:8088</value>
   </property>
 
   <!-- === 应用提交 ACL === -->

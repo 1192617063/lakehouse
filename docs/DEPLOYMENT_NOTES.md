@@ -508,7 +508,7 @@ cat > conf/hive/hive-site.xml << 'EOF'
   </property>
   <property>
     <name>hive.metastore.uris</name>
-    <value>thrift://hive-metastore:9083</value>
+    <value>thrift://hivemetastore.lakehouse.com:9083</value>
   </property>
   <property>
     <name>hive.metastore.kerberos.keytab.file</name>
@@ -691,9 +691,9 @@ EOF
 cat > conf/flink/flink-conf.yaml << 'EOF'
 jobmanager.rpc.address: flink-jobmanager
 jobmanager.rpc.port: 6123
-jobmanager.memory.process.size: 1024m
+jobmanager.memory.process.size: 4096m
 
-taskmanager.numberOfTaskSlots: 4
+taskmanager.numberOfTaskSlots: 8
 taskmanager.memory.process.size: 4096m
 taskmanager.memory.managed.fraction: 0.4
 
@@ -708,7 +708,9 @@ execution.checkpointing.timeout: 10min
 execution.checkpointing.min-pause: 30s
 
 classloader.resolve-order: parent-first
-classloader.parent-first-patterns.additional: org.apache.hadoop.;org.apache.hive.;org.apache.iceberg.;org.apache.paimon.
+# ⚠️ org.apache.hadoop 不能在 parent-first 里！
+# Flink 自己打包了 shaded Hadoop 3.7.0，外部 Hadoop 3.3.6 覆盖会导致 Kerberos UGI 不兼容
+classloader.parent-first-patterns.additional: org.apache.hive.;org.apache.iceberg.;org.apache.paimon.
 
 env.java.opts.all: --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.text=ALL-UNNAMED --add-opens=java.base/java.time=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED --add-exports=java.base/sun.net.util=ALL-UNNAMED --add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED --add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED
 
@@ -722,7 +724,13 @@ security.kerberos.login.use-ticket-cache: false
 security.kerberos.login.keytab: /etc/security/keytabs/flink.service.keytab
 security.kerberos.login.principal: flink/flink-jobmanager.lakehouse.com@LAKEHOUSE.COM
 security.kerberos.login.contexts: Client,KafkaClient
+# ⚠️ standalone 模式必须关掉（NPE），JM/TM 自己 kinit 拿 TGT 不需要 delegation token
 security.delegation.tokens.enabled: false
+
+# SQL Gateway 在 JM 内启动，继承 JM 的 Kerberos UGI subject
+# SQL Client 远程连 Gateway 时不走 embedded JVM，避免 Subject 无 TGT
+sql-gateway.endpoint.rest.address: 0.0.0.0
+sql-gateway.endpoint.rest.port: 8083
 EOF
 ```
 
@@ -752,7 +760,7 @@ DROP CATALOG IF EXISTS paimon_catalog;
 CREATE CATALOG paimon_catalog WITH (
   'type'='paimon',
   'metastore'='hive',
-  'uri'='thrift://hive-metastore:9083',
+  'uri'='thrift://hivemetastore.lakehouse.com:9083',
   'warehouse'='hdfs://namenode:9000/user/paimon',
   'hive-conf-dir'='/opt/flink/conf',
   'hive.metastore.kerberos.principal'='hive/hivemetastore.lakehouse.com@LAKEHOUSE.COM'
@@ -795,19 +803,36 @@ chmod +x conf/flink/sql-client-entrypoint.sh
 > 必须通过 `sql-client-init.sql` 中的 `CREATE CATALOG` DDL 创建，创建后会持久化到
 > `table.catalog-store.file.path` 目录。`conf.d/catalogs.yaml` 方式无效。
 
-### 4.7 Spark 配置
+### 4.7 Spark 配置（**YARN yarn-client 模式**）
 
 ```bash
 cat > conf/spark/spark-defaults.conf << 'EOF'
+# === Spark YARN JAR 预打包 ===
+# 让所有 executor 从 HDFS 统一拉取完整 JAR 包，避免 Kryo + spark.yarn.archive 组合的 EOFException bug
+spark.yarn.archive hdfs://namenode:9000/user/spark/share/spark-jars.tar.gz
+
+# === 序列化器 ===
+# Kryo + spark.yarn.archive 有 EOFException / StreamCorruptedException（Spark 内部 bug）
+# JavaSerializer + spark.yarn.archive 稳定
+# spark.serializer org.apache.spark.serializer.KryoSerializer   ← 注释掉（默认 JavaSerializer）
+
+# === 资源 ===
+spark.driver.memory 1g
+spark.executor.memory 1g
+spark.executor.cores 1
+
+# === 额外 JAR ===
 spark.driver.extraClassPath /opt/bitnami/spark/extra-jars/paimon-spark-3.5-0.9.0.jar:/opt/bitnami/spark/extra-jars/iceberg-spark-runtime-3.5_2.12-1.7.1.jar:/opt/bitnami/spark/extra-jars/hudi-spark3.5-bundle_2.12-1.0.2.jar:/opt/bitnami/spark/extra-jars/mysql-connector-j-8.4.0.jar:/opt/bitnami/spark/extra-jars/postgresql-42.7.3.jar:/opt/bitnami/spark/extra-jars/mongo-spark-connector_2.12-10.4.0.jar:/opt/bitnami/spark/extra-jars/bson-5.2.0.jar:/opt/bitnami/spark/extra-jars/mongodb-driver-core-5.2.0.jar:/opt/bitnami/spark/extra-jars/mongodb-driver-sync-5.2.0.jar
 spark.executor.extraClassPath /opt/bitnami/spark/extra-jars/paimon-spark-3.5-0.9.0.jar:/opt/bitnami/spark/extra-jars/iceberg-spark-runtime-3.5_2.12-1.7.1.jar:/opt/bitnami/spark/extra-jars/hudi-spark3.5-bundle_2.12-1.0.2.jar:/opt/bitnami/spark/extra-jars/mysql-connector-j-8.4.0.jar:/opt/bitnami/spark/extra-jars/postgresql-42.7.3.jar:/opt/bitnami/spark/extra-jars/mongo-spark-connector_2.12-10.4.0.jar:/opt/bitnami/spark/extra-jars/bson-5.2.0.jar:/opt/bitnami/spark/extra-jars/mongodb-driver-core-5.2.0.jar:/opt/bitnami/spark/extra-jars/mongodb-driver-sync-5.2.0.jar
-spark.executor.extraJavaOptions -Djava.security.krb5.conf=/etc/krb5.conf -Djavax.security.auth.useSubjectCredsOnly=false
-spark.driver.extraJavaOptions -Djava.security.krb5.conf=/etc/krb5.conf -Djavax.security.auth.useSubjectCredsOnly=false
-spark.serializer org.apache.spark.serializer.KryoSerializer
+spark.driver.extraJavaOptions --add-exports java.base/sun.nio.ch=ALL-UNNAMED
+
+# === SQL 引擎扩展 ===
 spark.sql.extensions org.apache.paimon.spark.extensions.PaimonSparkSessionExtensions,org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions,org.apache.spark.sql.hudi.HoodieSparkSessionExtension
+
+# === Catalog（⚠️ hivemetastore.uris 必须用 FQDN 匹配 KDC principal hostname）===
 spark.sql.catalog.paimon org.apache.paimon.spark.SparkCatalog
 spark.sql.catalog.paimon.metastore hive
-spark.sql.catalog.paimon.uri thrift://hive-metastore:9083
+spark.sql.catalog.paimon.uri thrift://hivemetastore.lakehouse.com:9083
 spark.sql.catalog.paimon.warehouse hdfs://namenode:9000/user/paimon
 spark.sql.catalog.paimon.hive-conf-dir /opt/bitnami/spark/conf
 spark.sql.catalog.iceberg org.apache.iceberg.spark.SparkCatalog
@@ -816,23 +841,29 @@ spark.sql.catalog.iceberg.uri http://iceberg-rest:8181
 spark.sql.catalog.iceberg.warehouse hdfs://namenode:9000/user/iceberg
 spark.sql.catalog.hudi org.apache.spark.sql.hudi.catalog.HoodieCatalog
 spark.sql.catalog.hudi.warehouse hdfs://namenode:9000/user/hudi
+
+# === Kerberos（Spark on YARN：keytab 登录 → delegation token → YARN 分发给 executor）===
 spark.kerberos.keytab /etc/security/keytabs/spark.service.keytab
 spark.kerberos.principal spark/spark-master.lakehouse.com@LAKEHOUSE.COM
-spark.kerberos.relogin.enabled true
-spark.executorEnv.KRB5CCNAME /tmp/krb5cc_spark
-spark.yarn.appMasterEnv.KRB5CCNAME /tmp/krb5cc_spark
+spark.kerberos.relogin.period 30s
+spark.kerberos.access.hadoopFileSystems hdfs://namenode:9000
+spark.security.credentials.renewalRatio 0.75
+spark.security.credentials.retryWait 10s
+
+# === Hadoop Kerberos ===
 spark.hadoop.hadoop.security.authentication kerberos
 spark.hadoop.dfs.namenode.kerberos.principal nn/namenode.lakehouse.com@LAKEHOUSE.COM
 spark.hadoop.dfs.namenode.kerberos.internal.spnego.principal HTTP/namenode.lakehouse.com@LAKEHOUSE.COM
-spark.hadoop.mapreduce.job.kerberos.principal spark/spark-master.lakehouse.com@LAKEHOUSE.COM
 EOF
 ```
 
-> **说明**：
+> **重要说明**：
+> - **所有 Spark-submit 作业**：`--master yarn --deploy-mode client`（**不是 standalone 也不是 local！**）
+> - `spark.yarn.archive` 首次需打包（在 spark 容器里）：`tar -czf /tmp/spark-jars.tar.gz jars/ extra-jars/ && hdfs dfs -put -f /tmp/spark-jars.tar.gz /user/spark/share/`
+> - Kryo + spark.yarn.archive 组合有 EOFException bug，必须用默认 JavaSerializer
 > - JDBC 驱动（mysql/postgresql）用于 Spark 离线作业直连源库做全量回灌
 > - Paimon catalog 使用 Hive Metastore，与 Flink 共享元数据
-> - Hudi 表通过 Hive Metastore（spark_catalog）访问，catalog name 为 `cdc_demo.users`
-> - KRB5CCNAME 指向共享票据缓存 `/tmp/krb5cc_spark`，由入口脚本 kinit 生成
+> - **kerberos principal hostname 必须用 FQDN**（如 `hivemetastore.lakehouse.com`，不是短名 `hive-metastore`）
 
 ```bash
 cat > conf/spark/spark-entrypoint.sh << 'EOF'
@@ -892,7 +923,10 @@ SPARK_IMAGE=lakehouse-spark:3.5.6
 SPARK_BASE_IMAGE=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/bitnami/spark:3.5.6
 ```
 
-> **注意**：本环境 Spark 使用 `local[*]` 模式运行以适配 Kerberos 认证。集群模式下 executor 需额外配置 HDFS delegation token。
+> **注意**：本环境 Spark 使用 **YARN yarn-client 模式**（`--master yarn --deploy-mode client`），
+> Kerberos delegation token 由 YARN ResourceManager + NodeManager 原生生成和分发给 executor。
+> `spark-submit` 必须加 `spark.yarn.archive`（HDFS 预打包 JAR）避免 StreamCorruptedException。
+> KryoSerializer + spark.yarn.archive 组合有 EOFException bug → 用默认 JavaSerializer。
 
 ### 4.8 Trino 配置
 
@@ -930,7 +964,7 @@ cat > conf/trino/catalog/hive.properties << 'EOF'
 connector.name=hive
 fs.hadoop.enabled=true
 hive.config.resources=/opt/hadoop/etc/hadoop/core-site.xml,/opt/hadoop/etc/hadoop/hdfs-site.xml
-hive.metastore.uri=thrift://hive-metastore:9083
+hive.metastore.uri=thrift://hivemetastore.lakehouse.com:9083
 hive.metastore.authentication.type=KERBEROS
 hive.metastore.service.principal=hive/hivemetastore.lakehouse.com@LAKEHOUSE.COM
 hive.metastore.client.principal=trino/trino.lakehouse.com@LAKEHOUSE.COM
@@ -958,7 +992,7 @@ cat > conf/trino/catalog/hudi.properties << 'EOF'
 connector.name=hudi
 fs.hadoop.enabled=true
 hive.config.resources=/opt/hadoop/etc/hadoop/core-site.xml,/opt/hadoop/etc/hadoop/hdfs-site.xml
-hive.metastore.uri=thrift://hive-metastore:9083
+hive.metastore.uri=thrift://hivemetastore.lakehouse.com:9083
 hive.metastore.authentication.type=KERBEROS
 hive.metastore.service.principal=hive/hivemetastore.lakehouse.com@LAKEHOUSE.COM
 hive.metastore.client.principal=trino/trino.lakehouse.com@LAKEHOUSE.COM
@@ -1374,6 +1408,10 @@ services:
       SERVICE_NAME: hiveserver2
       IS_RESUME: "true"
       HIVE_CUSTOM_CONF_DIR: /opt/hive/custom-conf
+      # ⚠️ 关键！override TEZ_HOME 让 entrypoint.sh 里的 $TEZ_HOME/* glob 不匹配
+      # hive 镜像 entrypoint.sh 只在 hiveserver2 分支把 $TEZ_HOME/* 加进 HADOOP_CLASSPATH
+      # Tez 0.9.1 自带 Hadoop 2.7 jar 会冲突 → 让 glob 不匹配任何文件
+      TEZ_HOME: /dev/null
     ports: ["21066:21066", "21067:21067"]
     depends_on: [hive-metastore]
     volumes:

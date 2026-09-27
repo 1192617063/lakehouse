@@ -34,6 +34,7 @@
   </property>
   <property>
     <name>hive.metastore.sasl.enabled</name>
+    <value>false</value>
     <value>true</value>
   </property>
   <property>
@@ -104,4 +105,23 @@
     <name>hive.exec.dynamic.partition.mode</name>
     <value>nonstrict</value>
   </property>
+
+  <!-- ORC 格式压缩优化 -->
+  <property>
+    <name>hive.exec.orc.default.compress</name>
+    <value>ZSTD</value>
+  </property>
+  <property>
+    <name>hive.exec.orc.stripe.size</name>
+    <value>134217728</value>
+  </property>
+  <property>
+    <name>hive.exec.orc.block.size</name>
+    <value>134217728</value>
+  </property>
+  <property>
+    <name>hive.exec.orc.default.row.index.stride</name>
+    <value>10000</value>
+  </property>
+
 </configuration>

@@ -69,7 +69,7 @@ SPARK_CMD=(
   spark-submit
   --master "${SPARK_MASTER:-local[*]}"
   --conf "spark.kerberos.keytab=/etc/security/keytabs/spark.service.keytab"
-  --conf "spark.kerberos.principal=spark/spark-master.lakehouse.com@LAKEHOUSE.COM"
+  --conf "spark.kerberos.principal=spark/sparkmaster.lakehouse.com@LAKEHOUSE.COM"
   --jars "${JARS}"
   /opt/spark/scripts/spark_batch_export.py
   --source-type "${SOURCE_TYPE}"
