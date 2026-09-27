@@ -335,6 +335,317 @@ SELECT user_id, SUM(cnt) FROM skew_users GROUP BY user_id ORDER BY SUM(cnt) DESC
 
 ---
 
+## 练 3.3 —— Iceberg Time Travel + Snapshot 数据回滚
+
+**学习目标**：湖仓最杀手的功能——**误操作后秒级回滚**。传统 DB 要 restore backup（小时级），湖仓只需 `rollback_to_snapshot` 原子切换 Manifest。
+
+### 步骤
+
+```bash
+# 1. Spark 建表（用 Spark Iceberg 扩展，spark_catalog 默认带 Iceberg）
+docker exec spark spark-sql -e "
+CREATE TABLE IF NOT EXISTS default.tt_tbl (id INT, val STRING) USING iceberg;
+INSERT INTO default.tt_tbl VALUES (1, 'good_a'), (2, 'good_b');
+-- 记下 Snapshot ID
+DESCRIBE HISTORY default.tt_tbl LIMIT 10;"
+
+# 2. 造错误（误删/误更新）
+docker exec spark spark-sql -e "
+DELETE FROM default.tt_tbl WHERE id = 1;   -- 误删了一行！
+UPDATE default.tt_tbl SET val = 'WRONG' WHERE id = 2;   -- 误改了！
+SELECT * FROM default.tt_tbl;   -- 现在只剩 1 行 WRONG"
+
+# 3. 看快照历史，找要回滚的 Snapshot ID
+docker exec spark spark-sql -e "DESCRIBE HISTORY default.tt_tbl;"
+# 预期：看到 snapshots，operation 列显示 append → overwrite(delete) → overwrite(update)
+
+# 4. 回滚！
+docker exec spark spark-sql -e "
+CALL iceberg.system.rollback_to_snapshot('default.tt_tbl', <SNAPSHOT_ID_BEFORE_ERROR>);
+SELECT * FROM default.tt_tbl;"
+# 预期：恢复到 2 行，id=1 存在，val='good_b'
+
+# 5. Trino 也能查 Time Travel
+docker exec trino trino --execute "
+SELECT * FROM iceberg.default.tt_tbl FOR VERSION AS OF <SNAPSHOT_ID>;"
+```
+
+**验证**：`rollback_to_snapshot` 后 Spark + Trino 都看到正确数据 = 通过。
+
+### 三种 Time Travel 语法对比
+
+| 引擎 | 语法 | 说明 |
+|------|------|------|
+| Spark SQL | `CALL iceberg.system.rollback_to_snapshot('db.tbl', snap_id)` | **原子切换 Manifest**（生产回滚首选） |
+| Spark SQL | `SELECT * FROM tbl TIMESTAMP AS OF '2026-09-27 10:00:00'` | 只读查询某个时间点的状态 |
+| Trino | `SELECT * FROM iceberg.db.tbl FOR VERSION AS OF snap_id` | 只读查询指定快照 |
+
+**思考题**：`rollback_to_snapshot` 和 `DELETE FROM tbl WHERE snapshot_id > x` 的区别？Manifest 是怎么原子替换的？
+> 提示：Iceberg 把"当前快照指针"存在单独的 manifest 元数据文件里，rollback 就是改这个指针。数据文件（Parquet）**一个都不动**，所以回滚是微秒级的。
+
+---
+
+## 练 3.4 —— HBase Region 手动运维（split + compaction）
+
+**学习目标**：HBase 生产运维三件事：Region 手动 split、Major Compaction 合并 StoreFile、Region 迁移。当 Region 过大（>10GB）或不均匀时必须手动干预。
+
+### 步骤
+
+```bash
+# 1. 预分区建表（3 个 Region：-∞~a / a~m / m~∞）
+docker exec hbase-master bash -c "/opt/hbase/bin/hbase shell <<'HBASE'
+create 't_region_ops', 'info', {SPLITS => ['a','m']}
+put 't_region_ops', 'a_001', 'info:v', 'hello1'
+put 't_region_ops', 'm_001', 'info:v', 'hello2'
+put 't_region_ops', 'z_001', 'info:v', 'hello3'
+echo '=== 初始 Region ==='
+list_regions 't_region_ops'
+
+# 2. 在 'a' 和 'm' 之间手动 split（4 个 Region）
+split_region 't_region_ops', 'c'
+echo '=== split 后 ==='
+list_regions 't_region_ops'
+
+# 3. Major Compaction 合并 StoreFile（生产手动触发）
+major_compact 't_region_ops'
+echo '=== major compact 完成 ==='
+
+# 4. 生产清理
+disable 't_region_ops'; drop 't_region_ops'
+exit
+HBASE"
+
+# 5. Web UI 看 Region 列表
+curl -s http://localhost:16010/table.jsp?name=t_region_ops | grep region | head -10
+```
+
+**验证**：初始 3 Region → split 后 4 Region（list_regions 输出增加一行）= 通过。
+
+### Region 运维命令速查
+
+| 命令 | 用途 | 触发时机 |
+|------|------|---------|
+| `split_region 't', 'split_key'` | 手动在 split_key 处切分 Region | Region 过大（>10GB）或热点集中 |
+| `major_compact 't'` | 合并所有 StoreFile 到 1 个 | 生产手动触发 / 定期调度 |
+| `compact 't', 'cf'` | 合并某个列族的 StoreFile | Minor compaction（默认自动） |
+| `move_region 'region_enc', 'target_rs'` | 手动迁移 Region | RegionServer 负载不均 |
+
+**思考题**：如果 Region 太多（比如 10000+）HBase Meta 会变成瓶颈——怎么在 Region 增长和 Meta 压力之间平衡？
+> 提示：预分区数 × 增长速度 = 预估 Region 数 → 控制在表数据量 1TB~2TB 时 ≤ 100 Region。
+
+---
+
+## 练 3.5 —— Spark 大 Shuffle 调优（Broadcast 阈值 + Shuffle 分区）
+
+**学习目标**：实测发现——**同样 10000×10000 Cross Join**，强制禁用 broadcast（`autoBroadcastJoinThreshold = -1`）比默认慢 3 倍。理解 Spark AQE / Broadcast Join / Shuffle Partitions 的边界。
+
+### 步骤
+
+```bash
+# 造数据（已在前面的测试里造好）
+docker exec spark spark-sql -e "
+CREATE TABLE IF NOT EXISTS default.big_left  (id INT) STORED AS PARQUET;
+CREATE TABLE IF NOT EXISTS default.big_right (id INT) STORED AS PARQUET;
+INSERT INTO default.big_left  SELECT EXPLODE(SEQUENCE(1,10000));
+INSERT INTO default.big_right SELECT EXPLODE(SEQUENCE(1,10000));
+SELECT COUNT(*) FROM default.big_left, default.big_right;"
+
+# 【对比 1】强制 SortMergeJoin（禁用 Broadcast）—— 慢
+docker exec spark spark-sql -e "
+SET spark.sql.autoBroadcastJoinThreshold = -1;
+SELECT COUNT(*) FROM default.big_left l JOIN default.big_right r ON l.id = r.id;"
+# 实测耗时：~3.7s
+
+# 【对比 2】恢复默认 —— 快
+docker exec spark spark-sql -e "
+SET spark.sql.autoBroadcastJoinThreshold = 10485760;   # 默认 10MB
+SELECT COUNT(*) FROM default.big_left l JOIN default.big_right r ON l.id = r.id;"
+# 实测耗时：~0.8s（Spark 把小表 autoBroadcast）
+
+# 【对比 3】调整 Shuffle Partitions —— 控制并发粒度
+docker exec spark spark-sql -e "
+SET spark.sql.shuffle.partitions = 20;   # 默认 200，小表可以减
+-- 用 EXPLAIN ANALYZE 看 Stage 分布
+EXPLAIN ANALYZE SELECT COUNT(*) FROM default.big_left l JOIN default.big_right r ON l.id = r.id;"
+```
+
+### 关键参数速查
+
+| 参数 | 默认 | 生产调优 | 什么时候调 |
+|------|------|---------|-----------|
+| `spark.sql.autoBroadcastJoinThreshold` | 10MB | 64~256MB | 小维表 Join 自动广播（但别太大，不然 Driver OOM） |
+| `spark.sql.shuffle.partitions` | 200 | Executor 数 × 2~4 | 大数据集 Shuffle 并发；小数据集减到 20~50 |
+| `spark.executor.memoryOverhead` | 10% | 1GB / Executor | Executor Container 被杀（YARN 报 "exceeding memory limits"） |
+| `spark.driver.memoryOverhead` | 10% | 512MB+ | Driver OOM（大 Broadcast 表） |
+
+**验证**：对比 3 种配置的 `EXPLAIN ANALYZE`，确认 Broadcast Join vs SortMerge Join 的区别 = 通过。
+
+**思考题**：为什么 `autoBroadcastJoinThreshold = -1` 禁用后会慢 3 倍？SortMerge Join vs Broadcast Join 的核心差异是什么？
+> 提示：Broadcast Join = 小表全量复制到每个 Executor，零 Shuffle；SortMerge Join = 两边都要 Shuffle（大表的瓶颈）。
+
+---
+
+## 练 3.6 —— Kafka 积压诊断与消费提速
+
+**学习目标**：生产最常见的报警——Consumer lag 告警。积压超过 1000 条 = 紧急、>100000 = 严重。怎么造 lag、查 lag、消 lag？
+
+### 步骤
+
+```bash
+# 1. 造 lag：Producer 快速造 10 万条，Consumer 故意慢
+docker exec kafka bash -c "for i in \$(seq 1 100000); do echo \"payload_\$i\"; done | \
+  /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic lag_demo 2>/dev/null"
+# producer 完成
+
+# 2. 查 Consumer lag（先起一个 group）
+docker exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 --topic lag_demo \
+  --group lag_group_demo --timeout-ms 10000 --max-messages 5000 &
+sleep 3
+docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server localhost:9092 --describe --group lag_group_demo 2>&1 | grep -E "lag|CURRENT"
+# 预期：LAG>95000（Consumer 才消费了 5000 条）
+
+# 3. 提速：增加 Consumer 并行度（多个 Consumer 实例 / 增加分区）
+docker exec kafka /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 --alter --topic lag_demo --partitions 4 2>/dev/null
+# 分区数从 1→4，Consumer 组里起 4 个实例 = 消费速度 ×4
+
+# 4. 监控 lag 实时变化
+while true; do
+  docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+    --bootstrap-server localhost:9092 --describe --group lag_group_demo 2>&1 | awk '/lag/{sum+=$2} END{print "剩余 lag:", sum}'
+  sleep 2
+done
+# 预期：lag 快速降到 0
+
+# 清理
+docker exec kafka /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 --delete --topic lag_demo 2>/dev/null
+```
+
+### 消 lag 三条铁律
+
+| 方法 | 提速倍数 | 注意事项 |
+|------|---------|---------|
+| 增加 Consumer 实例（同一组） | ×N（≤ 分区数） | Consumer 数不能超过分区数，多余的 idle |
+| 增加 Topic 分区数 | ×N | 分区数只能增不能减；增了要 Producer 也重平衡 |
+| 重平衡 Consumer offset | 快速跳到最新 | **会丢消息**，仅当积压不重要时用 |
+
+> 📖 **完整 Kafka 积压排查清单**（含 Flink Checkpoint lag、Spark Structured Streaming lag、常见 root cause）：
+> **[docs/PRODUCTION_DATA_OPS.md](PRODUCTION_DATA_OPS.md)** —— 第 3 章
+
+---
+
+## 练 3.7 —— Flink CDC Exactly-once 故障恢复
+
+**学习目标**：Flink CDC 管道挂了 10 分钟 → MySQL 改了 100 条 → 管道恢复后**既不漏也不重复**。Exactly-once 怎么做到的？Checkpoint + Barrier + Flink State Backend。
+
+### 步骤
+
+```bash
+# 1. 确保 Flink CDC 管道在跑（参考 CDC_PIPELINE.md 起 MySQL CDC → Iceberg）
+# 2. 起一个 SQL 客户端看 Flink 作业列表
+docker exec flink-jobmanager bash -c "curl -s http://localhost:8081/v1/jobs | head -c 500"
+
+# 3. 故意 kill Flink JobManager（制造故障）
+docker stop flink-jobmanager flink-taskmanager
+sleep 60
+
+# 4. Flink 挂了的时候，MySQL 造变更
+docker exec mysql mysql -uroot -proot -e "
+CREATE DATABASE IF NOT EXISTS shop; USE shop;
+CREATE TABLE IF NOT EXISTS products (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(100), price DECIMAL(10,2), stock INT);
+INSERT INTO shop.products (name, price, stock) VALUES
+('iPhone-XR', 3999.00, 500), ('iPad-Pro', 7999.00, 200), ('AirPods-3', 999.00, 1000);"
+
+# 5. 重启 Flink
+docker start flink-jobmanager flink-taskmanager
+sleep 120
+
+# 6. 验证 Exactly-once：Flink 从最近一次 Checkpoint 恢复
+docker exec flink-jobmanager bash -c "
+curl -s http://localhost:8081/v1/jobs/\$JOB_ID/checkpoints 2>/dev/null | python3 -m json.tool | head -30"
+
+# 7. 查 Iceberg：MySQL 新造的 3 条应该全在，而且不重复
+docker exec trino trino --execute "SELECT COUNT(*) FROM iceberg.shop.products;"
+# 预期：初始 4 + 新增 3 = 7 行（如果重复了说明 Exactly-once 没生效）
+```
+
+### Exactly-once 三要素
+
+| 要素 | 作用 |
+|------|------|
+| **Checkpoint** | 周期性把 Operator State（包括 Kafka Consumer offset）快照持久化 |
+| **Barrier** | Checkpoint 插入到 DataStream 中，所有并行子任务对齐后才拍快照 |
+| **Two-Phase Commit（Sink）** | Sink 端先写临时文件 → Barrier 通过 → 原子 commit（Iceberg/Hudi/Paimon 都支持） |
+
+**思考题**：Flink 挂了 10 分钟期间 Kafka 还在产消息，Checkpoint 里存的 Kafka offset 能精确回到故障前那一刻吗？还是有窗口？
+> 提示：Checkpoint 间隔默认 1min，所以最坏情况会重复消费 1min 内的消息。Exactly-once 通过 Sink 的幂等写入 + 主键去重来保证不脏数据。
+
+---
+
+## 练 3.8 —— 跨源一致性对账（MySQL ↔ 湖仓）
+
+**学习目标**：CDC 管道跑起来后，怎么验证数据真的对得上？"源库 1000 条，湖仓应该也是 1000 条，值也一样"——这个对账必须自动化。
+
+### 步骤
+
+```bash
+# 1. MySQL 造测试数据 + 启动 CDC
+docker exec mysql mysql -uroot -proot -e "
+CREATE DATABASE IF NOT EXISTS audit; USE audit;
+DROP TABLE IF EXISTS orders;
+CREATE TABLE orders (id INT PRIMARY KEY, user_id VARCHAR(10), amount DECIMAL(10,2), status VARCHAR(10));
+INSERT INTO orders VALUES (1,'U001',299.00,'paid'),(2,'U002',1599.00,'paid'),(3,'U003',89.00,'refunded');
+INSERT INTO orders VALUES (4,'U001',299.00,'paid'),(5,'U002',4799.00,'paid');"
+# Flink CDC 同步到 Iceberg（DDL 在 CDC_PIPELINE.md）
+sleep 60
+
+# 2. Spark SQL 查两边
+docker exec spark spark-sql -e "
+-- Spark JDBC 查 MySQL（源库）
+SELECT 'mysql_src' AS src, COUNT(*) AS cnt, SUM(amount) AS amt FROM (
+  SELECT * FROM jdbc_read.`mysql`.audit.orders
+);" 2>&1 | tail -5 || echo "JDBC 可能未配置，用 Trino mysql catalog 替代"
+
+docker exec trino trino --execute "
+SELECT 'mysql_src' AS src, COUNT(*) AS cnt, CAST(SUM(amount) AS VARCHAR) AS amt FROM mysql.audit.orders
+UNION ALL
+SELECT 'lake_iceberg' AS src, COUNT(*) AS cnt, CAST(SUM(amount) AS VARCHAR) AS amt FROM iceberg.audit.orders;" 2>&1
+
+# 3. 逐行对账（LEFT JOIN + IS NULL = 找丢失行）
+docker exec trino trino --execute "
+SELECT m.id, m.amount AS mysql_amt, i.amount AS iceberg_amt
+FROM mysql.audit.orders m
+LEFT JOIN iceberg.audit.orders i ON m.id = i.id
+WHERE i.id IS NULL OR m.amount <> i.amount;" 2>&1
+# 预期：空结果 = 完全一致；有结果 = 有丢数或值不一致
+```
+
+### 对账 SQL 模板（直接用）
+
+```sql
+-- 行数对账
+(SELECT 'src' AS tag, COUNT(*) FROM mysql.audit.orders)
+UNION ALL
+(SELECT 'lake' AS tag, COUNT(*) FROM iceberg.audit.orders);
+
+-- 逐行对账
+SELECT s.*, l.* FROM mysql.audit.orders s
+LEFT JOIN iceberg.audit.orders l ON s.id = l.id
+WHERE l.id IS NULL;
+
+-- 聚合对账（防止数值不一致但行数一样）
+SELECT SUM(s.amount), SUM(l.amount) FROM mysql.audit.orders s
+JOIN iceberg.audit.orders l ON s.id = l.id;
+```
+
+> 📖 **完整数据质量校验框架**（Great Expectations 风格的断言、字段校验、空值/重复/类型检查）：
+> **[docs/PRODUCTION_DATA_OPS.md](PRODUCTION_DATA_OPS.md)** —— 第 3 章（全量导入校验 5 条黄金规则）
+
+---
+
 ## 🧱 Case Study A：存量迁移五步法 + 数仓分层设计
 
 > 本笔记整合了之前三篇迁移专题文档的精华，作为 Roadmap 的高级实战。
