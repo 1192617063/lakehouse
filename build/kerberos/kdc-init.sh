@@ -98,15 +98,25 @@ create_and_export "yarn/resourcemanager.lakehouse.com@${REALM}" "${KEYTAB_DIR}/r
 create_and_export "yarn/nodemanager.lakehouse.com@${REALM}" "${KEYTAB_DIR}/nm.service.keytab"
 
 # HBase keytab：master + regionserver 两个 principal（同一个 keytab）
+# 注意：keytab 已存在时也要 check principal 是否存在（之前 principal 被吞过静默丢失）
 HBASE_KEYTAB="${KEYTAB_DIR}/hbase.service.keytab"
-if [ ! -f "${HBASE_KEYTAB}" ]; then
-    kadmin.local -q "addprinc -randkey hbase/hbasemaster.lakehouse.com@${REALM}" 2>/dev/null || true
-    kadmin.local -q "addprinc -randkey hbase/hbaseregionserver.lakehouse.com@${REALM}" 2>/dev/null || true
-    kadmin.local -q "ktadd -k ${HBASE_KEYTAB} hbase/hbasemaster.lakehouse.com@${REALM} hbase/hbaseregionserver.lakehouse.com@${REALM}" 2>/dev/null || true
-    chmod 644 "${HBASE_KEYTAB}" 2>/dev/null || true
-else
-    echo "Keytab ${HBASE_KEYTAB} already exists, skipping key rotation"
+HBASE_MASTER="hbase/hbasemaster.lakehouse.com@${REALM}"
+HBASE_RS="hbase/hbaseregionserver.lakehouse.com@${REALM}"
+
+HBASE_MISSING=false
+kadmin.local -q "getprinc ${HBASE_MASTER}" 2>&1 | grep -q "Principal does not exist" && HBASE_MISSING=true
+
+if $HBASE_MISSING; then
+    echo "⚠️ HBase principal 缺失（被之前的 bug 吞了），重建..."
+    kadmin.local -q "addprinc -randkey ${HBASE_MASTER}"
+    kadmin.local -q "addprinc -randkey ${HBASE_RS}"
+    kadmin.local -q "ktadd -k ${HBASE_KEYTAB} ${HBASE_MASTER} ${HBASE_RS}"
+elif [ ! -f "${HBASE_KEYTAB}" ]; then
+    kadmin.local -q "addprinc -randkey ${HBASE_MASTER}" 2>/dev/null || true
+    kadmin.local -q "addprinc -randkey ${HBASE_RS}" 2>/dev/null || true
+    kadmin.local -q "ktadd -k ${HBASE_KEYTAB} ${HBASE_MASTER} ${HBASE_RS}" 2>/dev/null || true
 fi
+chmod 644 "${HBASE_KEYTAB}" 2>/dev/null || true
 
 kadmin.local -q "addprinc -randkey lakehouse@${REALM}" 2>/dev/null || true
 if [ ! -f "${KEYTAB_DIR}/lakehouse.keytab" ]; then

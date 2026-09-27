@@ -1073,6 +1073,273 @@ echo "湖仓行数:"
 
 ---
 
+## 7. 生产故障演练 Playbook（高难度运维场景）
+
+> 本章节补 Roadmap 练不到但**生产 on-call 每天遇到**的故障场景。
+> 每个含「现象 → 诊断命令 → 修复命令 → 验证 → 根因」全流程。
+> **重要**：HBase Shell 不支持 `-e` 参数，只能用 heredoc（stdin 传 Ruby IRB 脚本）。
+
+---
+
+### 7.1 HBase RegionServer 掉了（WAL 自动恢复）
+
+**现象**：RegionServer 进程挂掉或被 OOM kill，其托管的 Region 不可用。
+
+```bash
+# Step 1: 造故障前置（先有张表 + 数据）
+docker exec hbase-master bash -c "/opt/hbase/bin/hbase shell -n <<'HBS' 2>&1
+create 't_fault_demo', 'info', {SPLITS => ['a','m']}
+put 't_fault_demo', 'a_row', 'info:v', 'before_kill'
+put 't_fault_demo', 'z_row', 'info:v', 'will_survive'
+list_regions 't_fault_demo'
+exit
+HBS
+" 2>&1 | tail -10
+# 预期：3 Region，其中 1 个在 hbaseregionserver:16020
+```
+
+**诊断**：
+```bash
+# ① 容器状态
+docker compose ps --format '{{.Name}} {{.Status}}' | grep regionserver
+# 预期：Exited (1) / OOMKilled
+
+# ② HBase Master 检测 dead RS
+docker exec hbase-master bash -c "/opt/hbase/bin/hbase shell -n <<'HBS' 2>&1
+list_deadservers
+exit
+HBS
+" 2>&1 | tail -5
+# 预期：表格列出 dead servers
+```
+
+**修复**：
+```bash
+# ③ 起回 RS（HBase Master 会自动 WAL replay + Region reassignment）
+docker start hbase-regionserver
+
+# ④ 等 Region 重新分配（30~60s）
+sleep 30
+```
+
+**验证**：
+```bash
+# ⑤ scan 数据还在（WAL replay 成功）
+docker exec hbase-master bash -c "/opt/hbase/bin/hbase shell -n <<'HBS' 2>&1
+scan 't_fault_demo'
+exit
+HBS
+" 2>&1 | grep -v "Picked up" | tail -8
+# 预期：a_row 和 z_row 都在（WAL 自动恢复）
+
+# ⑥ list_deadservers 空了
+docker exec hbase-master bash -c "/opt/hbase/bin/hbase shell -n <<'HBS' 2>&1
+list_deadservers
+exit
+HBS
+" 2>&1 | tail -3
+# 预期：0 dead servers
+```
+
+**根因**：RS 挂了 → Master 检测到 ZNode 超时（默认 10min）→ 标记 dead → 从 WAL 恢复未 flush 的数据 → 重新 assignment 到其他 RS。**不用手动干预，自动恢复。**
+
+---
+
+### 7.2 HDFS 坏块（fsck 诊断 + 手动删重建）
+
+**现象**：HDFS 数据块副本不足或损坏，读文件时报 `BlockMissingException` 或 `ChecksumException`。
+
+```bash
+# Step 1: 造测试文件
+docker exec namenode bash -c "hdfs dfs -put -f /etc/hosts /tmp/fault_demo.txt 2>/dev/null"
+
+# 诊断：单文件 fsck
+docker exec namenode bash -c "hdfs fsck /tmp/fault_demo.txt" | tail -10
+# 预期输出（全好时）：
+#  Total files:   1
+#  Total block groups (validated):        1
+#  Corrupt block groups:          0
+#  Missing block groups:          0
+#  ...
+#  The filesystem under path '/tmp/fault_demo.txt' is HEALTHY
+
+# 诊断：全集群 fsck（大集群慢，生产慎用）
+docker exec namenode bash -c "hdfs fsck /" | tail -15
+```
+
+**真实故障场景（生产遇到过）**：
+
+| fsck 输出 | 含义 | 修复 |
+|-----------|------|------|
+| `Missing block groups: N` | DataNode 挂了，某块所有副本丢了 | 找原始数据重 put；或 `hdfs debug recoverLease` |
+| `Corrupt block groups: N` | 块 checksum 对不上 | `hdfs dfs -rm /坏文件路径` + 重写 |
+| `Under-erasure-coded` | EC 策略副本不足（低于恢复阈值） | 等 DataNode 起来自动补，或 `hdfs ec -setPolicy` 改策略 |
+| `FSCK ended with errors` | NameNode safe mode 或有损坏元数据 | 退出 safe mode：`hdfs dfsadmin -safemode leave` |
+
+**修复示例**：
+```bash
+# 手动删坏文件 + 重写
+hdfs dfs -rm /tmp/bad_file
+# 从原始源头重 put
+docker exec namenode bash -c "hdfs dfs -put /source/bad_file /tmp/"
+```
+
+---
+
+### 7.3 Flink JobManager Kill + Checkpoint 自动恢复
+
+**现象**：Flink 流处理作业中断（JM OOM kill / YARN preempted / 手动 stop），需要恢复到最近一次 Checkpoint 继续跑。
+
+```bash
+# Step 1: 造故障（确保有 Flink 作业在跑，参考 APPENDIX_CDC_PIPELINE.md）
+curl -s http://localhost:8081/v1/jobs | python3 -m json.tool | head -5
+# 预期：{"jobs": [{"id": "...", "status": "RUNNING", ...}]}
+
+# Step 2: Kill JM 制造故障
+docker stop flink-jobmanager
+sleep 30
+
+# Step 3: Flink JM 挂了期间，源数据变化（模拟真实场景）
+docker exec mysql mysql -uroot -proot -e "
+USE shop; UPDATE products SET stock=0 WHERE id=1; INSERT INTO products VALUES (99,'test',99.00,99);"
+
+# Step 4: 恢复 JM
+docker start flink-jobmanager
+sleep 60   # 起 JM + TaskManager + 从 Checkpoint 恢复
+
+# Step 5: 验证恢复（作业自动从最近 Checkpoint 继续）
+curl -s http://localhost:8081/v1/jobs | python3 -m json.tool | grep -E "status|finished"
+# 预期：RUNNING 或 FINISHED（取决于之前是 streaming 还是 batch）
+
+# Step 6: 查目标表 —— 故障期间的变化应已同步
+docker exec trino trino --execute "SELECT * FROM iceberg.shop.products" 2>&1 | tail -10
+```
+
+**Checkpoint / Savepoint 核心概念**：
+
+| | Checkpoint | Savepoint |
+|---|---|---|
+| 触发 | 自动（间隔默认 1min） | 手动（Flink CLI `bin/flink savepoint`） |
+| 恢复 | 自动（JM 重启时自动找最近的） | 手动指定路径恢复 |
+| 数据量 | 较小（只存增量） | 较大（全量状态快照） |
+| 生产用途 | 故障自动恢复 | **升级作业版本前先 Savepoint，升级后从 Savepoint 恢复** |
+
+**生产升级作业版本的安全流程**：
+```bash
+# 1. 手动触发 Savepoint（把当前状态全量快照）
+flink run -d -m localhost:8081 --savepointPath hdfs:///savepoints/sp_before_upgrade/ \
+  -c MyJob my-job-v1.jar
+
+# 2. 停止作业（等 Savepoint 完成）
+flink stop -p hdfs:///savepoints/sp_before_upgrade/
+
+# 3. 升级 jar，从 Savepoint 恢复
+flink run -d -m localhost:8081 -s hdfs:///savepoints/sp_before_upgrade/ \
+  -c MyJob my-job-v2.jar
+# 状态无缝迁移！
+```
+
+---
+
+### 7.4 Spark / Trino OOM 诊断 + GC 日志分析
+
+**现象**：Driver OOM（大 Broadcast 表）、Executor OOM（大 Shuffle / Cartesian Join）、Trino Coordinator OOM。
+
+```bash
+# 诊断 1：Spark UI + YARN 日志
+# Spark UI: http://localhost:4040  →  Stages  →  找红色 OOM Stage
+# YARN: yarn logs -applicationId <app_id> -log_files syslog | tail -100
+# 预期看到：java.lang.OutOfMemoryError: Java heap space / Metaspace / Direct buffer
+
+# 诊断 2：Trino /var/log/trino.log
+docker exec trino tail -100 /var/log/trino/trino.log | grep -i "oom\|memory"
+```
+
+**修复场景速查**：
+
+| 报错 | 根因 | 修复 |
+|------|------|------|
+| `ExecutorLostFailure OOM` | Shuffle 分区里数据量太大（大 Key / Cartesian Join） | `spark.executor.memoryOverhead` + 加 `spark.sql.shuffle.partitions` 让数据更均匀 |
+| `Driver OOM during Broadcast` | Broadcast 表太大，Driver 装不下 | 调小 `autoBroadcastJoinThreshold`（让 Spark 用 SortMerge）；或增加 `spark.driver.memory` |
+| `Container killed by YARN for exceeding memory limits` | `memoryOverhead` 不够 | `spark.executor.memoryOverhead = max(executor_memory * 0.1, 1GB)` |
+| `Metaspace out of memory` | 类加载过多（Spark + Kryo + Kryo Serializer 类爆炸） | `spark.executor.extraJavaOptions=-XX:MaxMetaspaceSize=256m` |
+| `Trino Coordinator died` | 大查询占用 Coordinator 堆 | `query.max-memory-per-node` + 升级到专用 Coordinator + Worker 分离 |
+
+**生产 JVM 参数模板**（Spark Executor 大集群）：
+```
+spark.executor.memory = 8g
+spark.executor.memoryOverhead = 2g       # memoryOverhead 至少 Executor 的 20%
+spark.executor.extraJavaOptions = -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:MaxMetaspaceSize=256m
+spark.driver.memory = 4g
+spark.driver.memoryOverhead = 1g
+spark.driver.extraJavaOptions = -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+spark.sql.shuffle.partitions = 200       # Executor 数 × 2~4
+```
+
+**GC 日志分析**：
+```bash
+# 开启 GC 日志（JVM 参数）
+-verbose:gc -XX:+PrintGCDetails -Xloggc:/var/log/spark/gc.log
+# 分析工具：gceasy.io 上传 gc.log 看
+# 关键指标：Full GC 时间 > 1s 或频率 > 5次/min = 堆太小
+```
+
+---
+
+### 7.5 KDC 重建后 principal 丢失（Kerberos 生产踩坑）
+
+**现象**：`docker compose down -v && up` 后 HBase Master 报 `Client 'hbase/xxx' not found in Kerberos database`。
+
+**根因**：`kdc-init.sh` 里 `|| true` 吞了 addprinc 错误！如果之前 KDC `.stash` 没 ready / ktadd 路径不对，HBase principal **静默丢失**但没人发现。
+
+**修复（手动补 principal）**：
+```bash
+# ① 查哪些 principal 缺失
+docker exec kerberos kadmin.local -q "getprincs" 2>&1 | grep -v "^$" | sort
+# 对比预期清单（APPENDIX_KERBEROS.md 里所有 principal）
+
+# ② 缺哪个补哪个（以 HBase 为例）
+docker exec kerberos kadmin.local -q "addprinc -randkey hbase/hbasemaster.lakehouse.com@LAKEHOUSE.COM"
+docker exec kerberos kadmin.local -q "addprinc -randkey hbase/hbaseregionserver.lakehouse.com@LAKEHOUSE.COM"
+docker exec kerberos kadmin.local -q "ktadd -k /etc/security/keytabs/hbase.service.keytab hbase/hbasemaster.lakehouse.com@LAKEHOUSE.COM hbase/hbaseregionserver.lakehouse.com@LAKEHOUSE.COM"
+
+# ③ 重启组件
+docker compose restart hbase-master hbase-regionserver
+
+# ④ 验证
+curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:16010/   # 预期 200
+```
+
+**永久修复（kdc-init.sh）**：
+```bash
+# 之前（吞错误的写法）:
+if [ ! -f "${HBASE_KEYTAB}" ]; then
+    kadmin.local -q "addprinc ..." 2>/dev/null || true   # ← 错误被吞！
+fi
+
+# 现在（先 check principal 存在性）:
+HBASE_MISSING=false
+kadmin.local -q "getprinc hbase/hbasemaster...@${REALM}" 2>&1 | grep -q "Principal does not exist" && HBASE_MISSING=true
+if $HBASE_MISSING; then
+    echo "⚠️ HBase principal 缺失，重建..."
+    kadmin.local -q "addprinc ..."   # ← 不吞错误，显式输出
+fi
+```
+
+**KDC 重建 Checklist**（生产每次重建必跑）：
+```bash
+# 重建后必须验证 3 件事：
+docker exec kerberos kadmin.local -q "getprincs" 2>&1 | grep -c "^[a-z/]"  # principal 数量 = 21
+./scripts/add-user.sh alice Alice123                                       # add-user.sh 能跑
+docker exec hbase-master bash -c "kinit -kt ...hbase.service.keytab hbase/... && echo OK"  # keytab 能 kinit
+```
+
+---
+
+*最后更新：2026-09-27 — 新增 Section 7 生产故障演练 Playbook（5 个高难度场景，全部实测命令）*
+
+---
+
 ## 附录：相关文档
 
 - [APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md](./APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md) — Spark 离线作业与湖仓一体
