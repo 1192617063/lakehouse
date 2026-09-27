@@ -252,96 +252,34 @@ HBase Shell `count` 返回 4 → Spark Shell 写入 U004 → 再 `scan` 看到 5
 
 **学习目标**：CDC 是湖仓"活水"——OLTP 库变化实时同步到湖仓。这是真实生产里最常见的管道。
 
-### 步骤
+### 📖 完整步骤
+
+**直接看 [docs/CDC_PIPELINE.md](CDC_PIPELINE.md)** —— 里面有 MySQL binlog 配置、Flink SQL DDL 完整代码、Kafka upsert topic 设计、Iceberg Sink upsert.enabled 配置、Exactly-once 故障恢复全部细节。
+
+### 最小跑通清单（速查）
 
 ```bash
-# 1. MySQL 建库建表 + 造数据
-docker exec -i mysql mysql -uroot -proot <<'SQL'
-CREATE DATABASE IF NOT EXISTS shop;
-USE shop;
-CREATE TABLE products (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    name VARCHAR(100),
-    price DECIMAL(10,2),
-    stock INT,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-INSERT INTO products (name, price, stock) VALUES
-('iPhone-16', 6999.00, 120), ('MacBook-M4', 14999.00, 45),
-('AirPods-Pro3', 1899.00, 300), ('iPad-Air', 4799.00, 80);
-SELECT * FROM products;
-SQL
+# MySQL：确认 binlog
+grep -E "server-id|log_bin|binlog_format" /etc/mysql/my.cnf
 
-# 2. Flink SQL Gateway 起 CDC（docker exec flink-sql-client）
-#    MySQL CDC Source → Kafka Topic (UPSERT-kafka-connector) → Iceberg Sink
-docker exec flink-sql-client <<'SQL'
--- MySQL CDC Source（Docker MySQL binlog）
-CREATE TABLE mysql_products (
-    id INT,
-    name STRING,
-    price DECIMAL(10,2),
-    stock INT,
-    updated_at TIMESTAMP(3),
-    PRIMARY KEY (id) NOT ENFORCED
-) WITH (
-    'connector' = 'mysql-cdc',
-    'hostname' = 'mysql',
-    'port' = '3306',
-    'database-name' = 'shop',
-    'table-name' = 'products',
-    'username' = 'root',
-    'password' = 'root',
-    'scan.startup.mode' = 'initial',
-    'server-time-zone' = 'Asia/Shanghai'
-);
+# Flink SQL Gateway 起 CDC（DDL 在 CDC_PIPELINE.md 里）
+docker exec flink-sql-client   # 粘贴 DDL
 
--- Iceberg Sink（upsert on primary key）
-CREATE TABLE iceberg_products (
-    id INT,
-    name STRING,
-    price DECIMAL(10,2),
-    stock INT,
-    updated_at TIMESTAMP,
-    PRIMARY KEY (id) NOT ENFORCED
-) WITH (
-    'connector' = 'iceberg',
-    'catalog' = 'iceberg',
-    'database' = 'shop',
-    'table' = 'products',
-    'write.upsert.enabled' = 'true'
-);
-
--- 管道
-INSERT INTO iceberg_products SELECT * FROM mysql_products;
-SQL
-
-# 3. MySQL 造变更
-docker exec mysql mysql -uroot -proot -e "
-  UPDATE shop.products SET stock=100 WHERE id=1;
-  INSERT INTO shop.products (name, price, stock) VALUES ('HomePod', 2299.00, 200);
-"
-
-# 4. Trino / Spark 看 Iceberg 结果
-docker exec trino trino --execute "SELECT * FROM iceberg.shop.products ORDER BY id"
+# MySQL 造变更 → Trino 查 Iceberg
+docker exec mysql mysql -uroot -proot -e "UPDATE shop.products SET stock=100 WHERE id=1"
+docker exec trino trino --execute "SELECT * FROM iceberg.shop.products WHERE id=1"
+# 预期：stock 立刻变成 100
 ```
 
 ### 验证
 
 MySQL 改 stock → Iceberg 秒级同步 → Trino 查 stock 变成 100 + 新增 HomePod = 通过。
 
-### 坑点
+### 思考题（做完再看）
 
-| 现象 | 根因 | 修复 |
-|------|------|------|
-| Flink CDC 报 `Can't read binlog` | MySQL 没开 binlog 或格式不对 | 确认 `server-id=1`、`log_bin`、`binlog_format=ROW` |
-| Iceberg upsert 不生效 | 没声明 PRIMARY KEY 或 `write.upsert.enabled=false` | Flink DDL 里 `PRIMARY KEY (...) NOT ENFORCED` + Sink 加 upsert.enabled |
-| Trino 查 Iceberg 报 `Table does not exist` | Iceberg catalog 没注册 | 看 docker-compose trino iceberg.properties catalog 配置 |
-
-### 扩展
-
-- [ ] 加一个 Hudi 和 Paimon Sink，对比三者的 upsert/merge 实现差异
-- [ ] 在 Flink 里加窗口聚合：每 5 分钟统计 stock<50 的商品数
-- [ ] 让 CDC 暂停 10 分钟 → MySQL 改 10 条 → 恢复 → 看是否幂等（exactly-once）
+> 1. Flink CDC + Iceberg upsert，**Exactly-once** 是怎么实现的？是 Checkpoint + Two-Phase Commit 还是别的？
+> 2. Iceberg 的 `write.upsert.enabled=true` 和 Flink Sink 的 `PRIMARY KEY NOT ENFORCED` —— 两个地方都要声明主键，能不能只声明一处？为什么？
+> 3. 如果管道挂了 10 分钟，MySQL 改了 100 条，管道恢复后**不会漏也不会重复**——这是怎么保证的？
 
 ---
 
@@ -391,80 +329,28 @@ Spark `DESCRIBE` 看到 age 列 → 查询显示老数据 age=NULL → Trino 也
 
 **学习目标**：HBase 导入大量数据时，`put` 逐条写 RegionServer 会压垮节点。BulkLoad 是**直接生成 HFile 放到 HDFS 对应 Region 目录**，零写放大。
 
-### 步骤
+### 📖 完整步骤
+
+**直接看 [docs/PRODUCTION_DATA_OPS.md](PRODUCTION_DATA_OPS.md)** —— 里面有 BulkLoad 完整 Spark Shell 代码、预分区 SPLITS 策略、RowKey 热点规避、Region 对齐检查。
+
+### 核心原理（一句话）
+
+`saveAsNewAPIHadoopFile` → 生成 HFile → `LoadIncrementalHFiles.doBulkLoad` 原子 move 到 HBase Region 目录。RegionServer **完全不参与写入**，只有 Meta 更新。
+
+### 最小验证命令
 
 ```bash
-# 1. 造 100 万行 CSV（宿主机）
-python3 -c "
-import csv, random
-with open('/tmp/hbase_bulk.csv', 'w') as f:
-    w = csv.writer(f)
-    for i in range(1000000):
-        w.writerow([f'U{i:07d}', f'user_{i}', random.randint(18,80), random.choice(['Beijing','Shanghai','Shenzhen'])])
-"
-ls -lh /tmp/hbase_bulk.csv  # 约 30MB
-
-# 2. Spark Shell BulkLoad
-docker cp /tmp/hbase_bulk.csv spark:/tmp/hbase_bulk.csv
-docker exec spark spark-shell <<'SPARK'
-import org.apache.hadoop.hbase._
-import org.apache.hadoop.hbase.mapreduce._
-import org.apache.hadoop.hbase.util._
-import org.apache.spark._
-
-val hbaseConf = HBaseConfiguration.create()
-val tableName = "t_user_bulk"
-TableName.valueOf(tableName)
-
-// Spark 读 CSV → RDD[(ImmutableBytesWritable, Put)]
-val sc = spark.sparkContext
-val raw = sc.textFile("hdfs:///tmp/hbase_bulk.csv")
-
-val pairRdd = raw.map { line =>
-  val parts = line.split(",")
-  val rowKey = Bytes.toBytes(parts(0))
-  val put = new Put(rowKey)
-  put.addColumn("info".getBytes, "name".getBytes, parts(1).getBytes)
-  put.addColumn("info".getBytes, "age".getBytes, parts(2).getBytes)
-  put.addColumn("info".getBytes, "city".getBytes, parts(3).getBytes)
-  (new ImmutableBytesWritable(rowKey), put)
-}
-
-// HBase Shell 先建表：预分区 + Region 对齐
-// 这里假设表已存在，直接 BulkLoad
-val stagingDir = "hdfs:///tmp/hbase_staging"
-PairRDDFunctions.saveAsNewAPIHadoopFile(
-  pairRdd, stagingDir,
-  classOf[ImmutableBytesWritable], classOf[Put],
-  classOf[HFileOutputFormat2], hbaseConf
-)
-
-// 触发 BulkLoad：HFile → HBase Region 目录
-val bulkLoader = new LoadIncrementalHFiles(hbaseConf)
-val conn = ConnectionFactory.createConnection(hbaseConf)
-val table = conn.getTable(TableName.valueOf(tableName))
-bulkLoader.doBulkLoad(new org.apache.hadoop.fs.Path(stagingDir), conn.getAdmin, table,
-  conn.getRegionLocator(TableName.valueOf(tableName)))
-println(s"✅ BulkLoad 完成: $stagingDir → $tableName")
-SPARK
-
-# 3. 验证
+# 造 100 万行 CSV → Spark BulkLoad → count
 docker exec hbase-master hbase shell <<'HBASE'
 count 't_user_bulk', INTERVAL => 100000
 HBASE
+# 预期：1,000,000（对比逐条 put 至少慢 10 倍）
 ```
 
-### 验证
+### 思考题
 
-`count` 返回 1,000,000 = 通过。对比逐条 put 写法的耗时（至少 10 倍慢）。
-
-### 坑点
-
-| 现象 | 根因 | 修复 |
-|------|------|------|
-| BulkLoad 报 `NoSuchRegion` | 数据 RowKey 不在任何 Region 范围内 | 建表时 `create 't', 'info', {SPLITS => ...}` 预分区，确保 RowKey 前缀覆盖 |
-| Region 切分了但 HFile 没跟上 | BulkLoad 完成后 Region 变了 | 先等表稳定（无 split/compaction）再 BulkLoad |
-| `Permission denied /tmp/hbase_staging` | Kerberos 态 HDFS staging 目录权限 | 容器里 Spark 有 delegation token，没问题；宿主机 CLI 要 kinit |
+> BulkLoad 完成后 Region 切分了——切分出来的新 Region 里**有没有 HFile**？如果没有，数据去哪了？
+> 提示：bulkload 是原子 move，切分后新 Region 的 HFile 是 split 产生的，和 bulkload 无关。
 
 ---
 
@@ -743,7 +629,7 @@ docker compose ps -a | head -10
 ## 📂 推荐阅读顺序（和现有 docs 配合）
 
 ```
-练 1.1  →  docs/SWITCH_TO_SIMPLE.md + SWITCH_TO_KERBEROS.md + check-auth-status.sh 源码
+练 1.1  →  docs/AUTH_SWITCH.md + check-auth-status.sh 源码
 练 1.2  →  docs/LAKEHOUSE_OVERVIEW.md（架构）
 练 2.1  →  docs/CDC_PIPELINE.md
 练 2.3  →  docs/PRODUCTION_DATA_OPS.md

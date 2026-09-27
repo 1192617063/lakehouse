@@ -205,8 +205,7 @@ Release 包包含：
 | [总览笔记](docs/LAKEHOUSE_OVERVIEW.md) | ⭐ 平台架构、组件表、快速上手（**先读这个**） |
 | [**学习路径（初→中→资深）**](docs/LEARNING_PATH.md) | ⭐ **实战练习册**：跨引擎查询 / CDC 管道 / BulkLoad / 小文件治理 / 数据倾斜 |
 | [Kerberos 清单](docs/KERBEROS_PRINCIPALS.md) | 所有 principal + 管理命令 + 新增组件 Checklist |
-| [**Kerberos→SIMPLE 回滚**](docs/SWITCH_TO_SIMPLE.md) | ⭐ **一键回滚到 SIMPLE auth**（含完整步骤 + HBase 3 层改动详解 + 对比表） |
-| [**SIMPLE→Kerberos 切换**](docs/SWITCH_TO_KERBEROS.md) | ⭐ **从 SIMPLE auth 切回 Kerberos 完整步骤**（含一键脚本 + HBase 修复） |
+| [**Auth 切换（Kerberos ↔ SIMPLE）**](docs/AUTH_SWITCH.md) | ⭐ **双向完整指南**：一键脚本 + HBase 3 层改动详解 + 7 个已知坑点 |
 | [存量迁移与集群规划](docs/MIGRATION_AND_CLUSTER_PLANNING.md) | 迁移方法论 + 实时/离线数仓架构设计 |
 | [MongoDB → HBase 迁移](docs/MIGRATION_MONGODB_TO_HBASE.md) | MongoDB 存量数据迁移实施指南 |
 | [CDC 管道](docs/CDC_PIPELINE.md) | MySQL/PG → Flink CDC → Kafka → Iceberg/Hudi/Paimon |
