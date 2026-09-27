@@ -390,7 +390,7 @@ services:
         FLINK_BASE_IMAGE: ${FLINK_BASE_IMAGE}
     container_name: flink-sql-client
     hostname: flink-sql-client.lakehouse.com
-    entrypoint: ["/opt/flink/conf/sql-client-entrypoint.sh"]
+    # entrypoint: 直接 sleep infinity，kinit 在 sql-client.sh 里手动做
     command: ["sleep", "infinity"]
     environment:
       FLINK_CLASSPATH: /opt/flink/lib/extra/*

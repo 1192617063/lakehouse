@@ -9,8 +9,8 @@
 #
 # 说明:
 #   - 默认使用 local[*] 模式（适配本环境 Kerberos 认证）
-#   - 如需集群模式，设置 SPARK_MASTER=spark://spark-master:7077
-#   - 该脚本在 spark-master 容器内执行 spark-sql
+#   - 如需集群模式，设置 SPARK_MASTER=spark://spark:7077
+#   - 该脚本在 spark 容器内执行 spark-sql
 # ============================================================
 set -e
 
@@ -23,7 +23,7 @@ else
     TTY=""
 fi
 
-docker exec $TTY spark-master bash -c "
+docker exec $TTY spark bash -c "
 export SPARK_HOME=/opt/bitnami/spark
 export HADOOP_HOME=/opt/hadoop
 export HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop

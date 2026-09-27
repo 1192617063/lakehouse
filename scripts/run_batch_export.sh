@@ -112,7 +112,7 @@ for arg in "${SPARK_CMD[@]}"; do
   CMD_STR+="'${arg//\'/\'\\\'\'}' "
 done
 
-docker exec spark-master bash -c "
+docker exec spark bash -c "
 export SPARK_HOME=/opt/bitnami/spark
 export HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
 export KRB5CCNAME=/tmp/krb5cc_spark
