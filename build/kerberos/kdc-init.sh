@@ -84,8 +84,8 @@ create_and_export "kafka/kafka.lakehouse.com@${REALM}" "${KEYTAB_DIR}/kafka.serv
 create_and_export "spark/spark-master.lakehouse.com@${REALM}" "${KEYTAB_DIR}/spark.service.keytab"
 create_and_export "iceberg/iceberg-rest.lakehouse.com@${REALM}" "${KEYTAB_DIR}/iceberg.service.keytab"
 create_and_export "trino/trino.lakehouse.com@${REALM}" "${KEYTAB_DIR}/trino.service.keytab"
-create_and_export "rm/namenode.lakehouse.com@${REALM}" "${KEYTAB_DIR}/rm.service.keytab"
-create_and_export "nm/namenode.lakehouse.com@${REALM}" "${KEYTAB_DIR}/nm.service.keytab"
+create_and_export "yarn/resource-manager.lakehouse.com@${REALM}" "${KEYTAB_DIR}/rm.service.keytab"
+create_and_export "yarn/node-manager.lakehouse.com@${REALM}" "${KEYTAB_DIR}/nm.service.keytab"
 
 kadmin.local -q "addprinc -randkey lakehouse@${REALM}" 2>/dev/null || true
 if [ ! -f "${KEYTAB_DIR}/lakehouse.keytab" ]; then

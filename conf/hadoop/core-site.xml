@@ -27,33 +27,38 @@
     <name>hadoop.security.auth_to_local</name>
     <value>RULE:[2:$1@$0](nn@.*)s/.*/hdfs/
 RULE:[2:$1@$0](dn@.*)s/.*/hdfs/
+RULE:[2:$1@$0](yarn@.*)s/.*/yarn/
 RULE:[2:$1@$0](hive@.*)s/.*/hive/
 RULE:[2:$1@$0](flink@.*)s/.*/flink/
 RULE:[2:$1@$0](spark@.*)s/.*/spark/
 RULE:[2:$1@$0](kafka@.*)s/.*/kafka/
-RULE:[2:$1@$0](rm@.*)s/.*/yarn/
-RULE:[2:$1@$0](nm@.*)s/.*/yarn/
 RULE:[1:$1@$0](lakehouse@.*)s/.*/lakehouse/
 DEFAULT</value>
   </property>
-  <property>
-    <name>mapreduce.job.kerberos.principal</name>
-    <value>hive</value>
-  </property>
-  <property>
-    <name>mapreduce.framework.name</name>
-    <value>local</value>
-  </property>
-  <property>
-    <name>mapreduce.cluster.local.dir</name>
-    <value>/tmp/mapred/local</value>
-  </property>
+
+  <!-- === 代理用户（HiveServer2 提交 YARN 作业需要代理身份）=== -->
   <property>
     <name>hadoop.proxyuser.hive.hosts</name>
     <value>*</value>
   </property>
   <property>
     <name>hadoop.proxyuser.hive.groups</name>
+    <value>*</value>
+  </property>
+  <property>
+    <name>hadoop.proxyuser.spark.hosts</name>
+    <value>*</value>
+  </property>
+  <property>
+    <name>hadoop.proxyuser.spark.groups</name>
+    <value>*</value>
+  </property>
+  <property>
+    <name>hadoop.proxyuser.yarn.hosts</name>
+    <value>*</value>
+  </property>
+  <property>
+    <name>hadoop.proxyuser.yarn.groups</name>
     <value>*</value>
   </property>
 </configuration>

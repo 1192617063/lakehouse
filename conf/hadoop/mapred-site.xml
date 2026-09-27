@@ -2,14 +2,18 @@
 <configuration>
   <property>
     <name>mapreduce.framework.name</name>
-    <value>local</value>
+    <value>yarn</value>
   </property>
   <property>
     <name>mapreduce.cluster.local.dir</name>
-    <value>/tmp/mapred/local</value>
+    <value>/data/yarn/mapred/local</value>
   </property>
   <property>
-    <name>mapreduce.job.kerberos.principal</name>
-    <value>hive</value>
+    <name>mapreduce.jobhistory.address</name>
+    <value>resource-manager.lakehouse.com:10020</value>
+  </property>
+  <property>
+    <name>mapreduce.jobhistory.webapp.address</name>
+    <value>resource-manager.lakehouse.com:19888</value>
   </property>
 </configuration>

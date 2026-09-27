@@ -36,6 +36,48 @@ services:
       - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
     mem_limit: 1.5g
 
+  yarn-resource-manager:
+    image: ${HADOOP_IMAGE}
+    container_name: yarn-resource-manager
+    hostname: resource-manager.lakehouse.com
+    user: root
+    command: ["yarn", "resourcemanager"]
+    environment:
+      - HADOOP_HOME=/opt/hadoop
+      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+    ports:
+      - "8088:8088"
+    depends_on: [namenode]
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.33
+    volumes:
+      - ./conf/hadoop:/opt/hadoop/etc/hadoop
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+    mem_limit: 1g
+
+  yarn-node-manager:
+    image: ${HADOOP_IMAGE}
+    container_name: yarn-node-manager
+    hostname: node-manager.lakehouse.com
+    user: root
+    command: ["yarn", "nodemanager"]
+    environment:
+      - HADOOP_HOME=/opt/hadoop
+      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+    depends_on: [yarn-resource-manager]
+    networks:
+      lakehouse-net:
+        ipv4_address: 172.30.80.34
+    volumes:
+      - ./conf/hadoop:/opt/hadoop/etc/hadoop
+      - ./data/yarn/nm-local:/data/yarn/nm-local
+      - ./data/yarn/nm-logs:/data/yarn/nm-logs
+      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
+    mem_limit: 1.5g
+
   hive-metastore:
     image: ${HIVE_IMAGE}
     container_name: hive-metastore
@@ -45,7 +87,7 @@ services:
       IS_RESUME: "true"
       HIVE_CUSTOM_CONF_DIR: /opt/hive/custom-conf
     ports: ["9083:9083"]
-    depends_on: [namenode, mysql]
+    depends_on: [namenode, mysql, yarn-resource-manager]
     networks:
       lakehouse-net:
         ipv4_address: 172.30.80.43
@@ -303,28 +345,25 @@ services:
         ipv4_address: 172.30.80.21
     mem_limit: 1g
 
-  spark-master:
+  spark:
     image: ${SPARK_IMAGE}
     build:
       context: .
       dockerfile: build/spark/Dockerfile
       args:
         SPARK_BASE_IMAGE: ${SPARK_BASE_IMAGE}
-    container_name: spark-master
-    hostname: spark-master.lakehouse.com
+    container_name: spark
+    hostname: spark.lakehouse.com
     user: root
     entrypoint: ["/opt/bitnami/spark/conf/spark-entrypoint.sh"]
+    command: ["sleep", "infinity"]
     environment:
-      - SPARK_MODE=master
-      - SPARK_MASTER_PORT=7077
-      - SPARK_MASTER_WEBUI_PORT=8080
       - HADOOP_HOME=/opt/hadoop
       - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
       - KRB5CCNAME=/tmp/krb5cc_spark
-      - JAVA_TOOL_OPTIONS=-Djava.security.krb5.conf=/etc/krb5.conf -Djava.security.krb5.ccache=/tmp/krb5cc_spark -Djavax.security.auth.useSubjectCredsOnly=false
+    depends_on: [yarn-resource-manager, hive-metastore]
     ports:
-      - "8080:8080"
-      - "7077:7077"
+      - "4040:4040"
     volumes:
       - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
       - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
@@ -337,45 +376,7 @@ services:
     networks:
       lakehouse-net:
         ipv4_address: 172.30.80.31
-    mem_limit: 1g
-
-  spark-worker:
-    image: ${SPARK_IMAGE}
-    build:
-      context: .
-      dockerfile: build/spark/Dockerfile
-      args:
-        SPARK_BASE_IMAGE: ${SPARK_BASE_IMAGE}
-    container_name: spark-worker
-    hostname: spark-worker.lakehouse.com
-    user: root
-    entrypoint: ["/opt/bitnami/spark/conf/spark-entrypoint.sh"]
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_WEBUI_PORT=8081
-      - SPARK_WORKER_MEMORY=1024m
-      - HADOOP_HOME=/opt/hadoop
-      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
-      - KRB5CCNAME=/tmp/krb5cc_spark
-      - JAVA_TOOL_OPTIONS=-Djava.security.krb5.conf=/etc/krb5.conf -Djava.security.krb5.ccache=/tmp/krb5cc_spark -Djavax.security.auth.useSubjectCredsOnly=false
-    depends_on:
-      - spark-master
-    ports:
-      - "8082:8081"
-    volumes:
-      - ./conf/kerberos/keytabs:/etc/security/keytabs:ro
-      - ./conf/kerberos/krb5.conf:/etc/krb5.conf:ro
-      - ./conf/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
-      - ./conf/spark/spark-entrypoint.sh:/opt/bitnami/spark/conf/spark-entrypoint.sh:ro
-      - ./conf/hive/hive-site.xml:/opt/bitnami/spark/conf/hive-site.xml:ro
-      - ./conf/hadoop:/opt/hadoop/etc/hadoop:ro
-      - ./sql:/opt/spark/sql
-      - ./scripts:/opt/spark/scripts
-    networks:
-      lakehouse-net:
-        ipv4_address: 172.30.80.32
-    mem_limit: 1.5g
+    mem_limit: 2g
 
   postgres:
     image: ${POSTGRES_IMAGE}
