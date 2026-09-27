@@ -227,7 +227,7 @@ docker exec trino trino --execute "SELECT * FROM hive.default.t_evolve"
 
 完整 Spark Shell 代码 + 预分区 SPLITS 策略 + RowKey 热点规避 + Region 对齐检查：
 
-👉 **[docs/APPENDIX_PRODUCTION_DATA_OPS.md](APPENDIX_PRODUCTION_DATA_OPS.md)**
+👉 **[docs/APPENDIX_OPS_HANDBOOK.md](APPENDIX_OPS_HANDBOOK.md)**
 
 ### 核心原理（一句话）
 
@@ -266,7 +266,7 @@ WHERE o.status = 'paid';
 
 1. ✅ CDC 管道秒级同步 MySQL → Iceberg
 2. ✅ Spark SQL ALTER TABLE ADD COLUMNS + Trino 实时可见
-3. ✅ HBase BulkLoad 百万级数据（参考 APPENDIX_PRODUCTION_DATA_OPS.md）
+3. ✅ HBase BulkLoad 百万级数据（参考 APPENDIX_OPS_HANDBOOK.md）
 4. ✅ Trino 跨 ≥2 catalogs JOIN
 
 ---
@@ -657,7 +657,7 @@ lag_g     lag_demo  0          5000            100000          95000
 ```
 
 > 📖 **完整 Kafka 积压排查清单**（Flink Checkpoint lag、Spark Structured Streaming lag、常见 root cause）：
-> **[docs/APPENDIX_PRODUCTION_DATA_OPS.md](APPENDIX_PRODUCTION_DATA_OPS.md)** —— 第 3 章
+> **[docs/APPENDIX_OPS_HANDBOOK.md](APPENDIX_OPS_HANDBOOK.md)** —— 第 3 章
 
 ---
 
@@ -819,7 +819,7 @@ JOIN iceberg.audit.orders l ON s.id = l.id;
 ```
 
 > 📖 **完整数据质量校验框架**（Great Expectations 风格的断言、字段校验、空值/重复/类型检查）：
-> **[docs/APPENDIX_PRODUCTION_DATA_OPS.md](APPENDIX_PRODUCTION_DATA_OPS.md)** —— 第 3 章（全量导入校验 5 条黄金规则）
+> **[docs/APPENDIX_OPS_HANDBOOK.md](APPENDIX_OPS_HANDBOOK.md)** —— 第 3 章（全量导入校验 5 条黄金规则）
 
 ---
 
@@ -929,7 +929,7 @@ JOIN iceberg.audit.orders l ON s.id = l.id;
 
 ### 一套表结构 + 一套逻辑（离线 + 实时）
 
-> 深度参考：[docs/APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md](APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md)
+> 深度参考：[docs/APPENDIX_SPARK_OFFLINE.md](APPENDIX_SPARK_OFFLINE.md)
 
 | 策略 | 说明 |
 |------|------|
@@ -1032,13 +1032,13 @@ HBASE
 | 专题 | 什么时候读 | 文件 |
 |------|----------|------|
 | **CDC 管道完整代码** | 练 2.1 想粘代码跑 | [docs/APPENDIX_CDC_PIPELINE.md](APPENDIX_CDC_PIPELINE.md) |
-| **Spark 离线作业完整 SQL** | 练 3.3 想粘 SQL / Spark Offline 方法论 | [docs/APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md](APPENDIX_SPARK_OFFLINE_LAKEHOUSE.md) |
+| **Spark 离线作业完整 SQL** | 练 3.3 想粘 SQL / Spark Offline 方法论 | [docs/APPENDIX_SPARK_OFFLINE.md](APPENDIX_SPARK_OFFLINE.md) |
 | **Auth 双向切换** | auth 出问题 / 想切换 | [docs/APPENDIX_AUTH_SWITCH.md](APPENDIX_AUTH_SWITCH.md) |
 | **Kerberos 管理** | principal / keytab 管理 | [docs/APPENDIX_KERBEROS.md](APPENDIX_KERBEROS.md) |
-| **HBase 生产操作** | BulkLoad / Region 管理 | [docs/APPENDIX_PRODUCTION_DATA_OPS.md](APPENDIX_PRODUCTION_DATA_OPS.md) |
+| **HBase 生产操作** | BulkLoad / Region 管理 | [docs/APPENDIX_OPS_HANDBOOK.md](APPENDIX_OPS_HANDBOOK.md) |
 | **故障排查** | 报 Kerberos 错 / classpath 错 / PermissionDenied | [docs/APPENDIX_TROUBLESHOOTING.md](APPENDIX_TROUBLESHOOTING.md) |
-| **DBeaver 连接** | Windows DBeaver Kerberos | [docs/APPENDIX_DBEAVER_CONNECTION_GUIDE.md](APPENDIX_DBEAVER_CONNECTION_GUIDE.md) |
-| **部署指南** | 全新环境从零部署 | [docs/APPENDIX_DEPLOYMENT_NOTES.md](APPENDIX_DEPLOYMENT_NOTES.md) |
+| **DBeaver 连接** | Windows DBeaver Kerberos | [docs/APPENDIX_DBEAVER.md](APPENDIX_DBEAVER.md) |
+| **部署指南** | 全新环境从零部署 | [docs/APPENDIX_DEPLOYMENT.md](APPENDIX_DEPLOYMENT.md) |
 
 ---
 
