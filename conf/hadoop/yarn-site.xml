@@ -19,7 +19,7 @@
   </property>
   <property>
     <name>yarn.resourcemanager.scheduler.class</name>
-    <value>org.apache.hadoop.yarn.server.resourcemanager.scheduler.fifo.FifoScheduler</value>
+    <value>org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler</value>
   </property>
 
   <!-- === Kerberos 认证 === -->
@@ -76,22 +76,77 @@
     <value>HADOOP_MAPRED_HOME=/opt/hadoop</value>
   </property>
 
-  <!-- === 容器资源 === -->
+  <!-- === 容器资源（宿主 23GB / 8 cores，给 NM 8GB / 6 vcores） === -->
   <property>
     <name>yarn.nodemanager.resource.memory-mb</name>
-    <value>2048</value>
+    <value>8192</value>
   </property>
   <property>
     <name>yarn.nodemanager.resource.cpu-vcores</name>
-    <value>2</value>
+    <value>6</value>
+  </property>
+  <property>
+    <name>yarn.scheduler.minimum-allocation-mb</name>
+    <value>128</value>
+  </property>
+  <property>
+    <name>yarn.scheduler.minimum-allocation-vcores</name>
+    <value>1</value>
   </property>
   <property>
     <name>yarn.scheduler.maximum-allocation-mb</name>
-    <value>2048</value>
+    <value>4096</value>
   </property>
   <property>
     <name>yarn.scheduler.maximum-allocation-vcores</name>
-    <value>2</value>
+    <value>4</value>
+  </property>
+
+  <!-- === Auxiliary Services（Tez / MR shuffle 必需）=== -->
+  <property>
+    <name>yarn.nodemanager.aux-services</name>
+    <value>mapreduce_shuffle</value>
+  </property>
+  <property>
+    <name>yarn.nodemanager.aux-services.mapreduce_shuffle.class</name>
+    <value>org.apache.hadoop.mapred.ShuffleHandler</value>
+  </property>
+
+  <!-- === CapacityScheduler 队列配置 === -->
+  <!-- 单节点集群：root.default 独占 100%，允许多个 AM 并发 -->
+  <property>
+    <name>yarn.scheduler.capacity.root.queues</name>
+    <value>default</value>
+  </property>
+  <property>
+    <name>yarn.scheduler.capacity.root.default.capacity</name>
+    <value>100</value>
+  </property>
+  <property>
+    <name>yarn.scheduler.capacity.root.default.maximum-capacity</name>
+    <value>100</value>
+  </property>
+  <property>
+    <name>yarn.scheduler.capacity.root.default.user-limit-factor</name>
+    <value>4</value>
+  </property>
+  <property>
+    <name>yarn.scheduler.capacity.root.default.minimum-user-limit-percent</name>
+    <value>100</value>
+  </property>
+  <!-- 允许多个 AM（默认 1，我们需要 Tez pool 的预热 AM + 查询 AM 并发）-->
+  <property>
+    <name>yarn.scheduler.capacity.maximum-applications</name>
+    <value>100</value>
+  </property>
+  <property>
+    <name>yarn.scheduler.capacity.root.default.maximum-applications</name>
+    <value>50</value>
+  </property>
+  <!-- 允许同一用户同时跑多个应用（Tez pool 预热 AM + 查询 AM）-->
+  <property>
+    <name>yarn.scheduler.capacity.default.user-limit-factor</name>
+    <value>8</value>
   </property>
 
   <!-- === 日志聚合 === -->

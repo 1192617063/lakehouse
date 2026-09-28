@@ -108,6 +108,26 @@
     <name>tez.am.container.idle.release-timeout-ms</name>
     <value>600000</value>
   </property>
+
+  <!-- === Tez 容器资源大小（单节点 8GB NM，数据量小所以可以调小）=== -->
+  <!-- AM 1536MB 默认太大，2 个预热 AM 就占 3GB；256MB 够我们小规模数据 -->
+  <property>
+    <name>tez.am.resource.memory.mb</name>
+    <value>256</value>
+  </property>
+  <property>
+    <name>tez.am.resource.vcores</name>
+    <value>1</value>
+  </property>
+  <!-- mapper / reducer container 大小 -->
+  <property>
+    <name>hive.tez.container.size</name>
+    <value>256</value>
+  </property>
+  <property>
+    <name>tez.task.resource.memory.mb</name>
+    <value>256</value>
+  </property>
   <property>
     <name>hive.exec.scratchdir</name>
     <value>/tmp/hive</value>
