@@ -35,7 +35,6 @@
   <property>
     <name>hive.metastore.sasl.enabled</name>
     <value>false</value>
-    <value>true</value>
   </property>
   <property>
     <name>hive.server2.thrift.port</name>

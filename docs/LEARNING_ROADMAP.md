@@ -1046,4 +1046,19 @@ HBASE
 
 ---
 
-*最后更新：2026-09-27 — Roadmap 重命名 + 物理合并两篇 MIGRATION 专题 + 保留 CDC/SPARK_OFFLINE 为深度附录*
+> ⚠️ **Kerberos Ticket 过期提醒**
+>
+> 本环境 Kerberos TGT 有效期 24 小时。过期后会报 `GSSException: No valid credentials provided` / `Could not contact any KDC` / `PermissionDenied` 等错误。
+> 所有组件的一键重新 kinit 命令请看：[APPENDIX_KERBEROS.md §6](APPENDIX_KERBEROS.md#六kerberos-ticket-过期重新认证--所有组件命令总表)
+>
+> 最常用的三条：
+> ```bash
+> # Spark SQL
+> docker exec spark kinit -kt /etc/security/keytabs/spark.service.keytab spark/sparkmaster.lakehouse.com@LAKEHOUSE.COM
+> # Flink SQL Client
+> docker exec flink-jobmanager kinit -kt /etc/security/keytabs/flink.service.keytab flink/flinkjobmanager.lakehouse.com@LAKEHOUSE.COM
+> # Hive beeline (必须同一个 bash 进程)
+> docker exec hive-server bash -c 'export KRB5CCNAME=/tmp/krb5cc_beeline && kinit -kt /etc/security/keytabs/hive.service.keytab hive/hiveserver.lakehouse.com@LAKEHOUSE.COM && beeline -u "jdbc:hive2://localhost:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM" -e "SHOW DATABASES;"'
+> ```
+
+*最后更新：2026-09-28 — 新增 Kerberos Ticket 过期提醒 + 快速 kinit 命令*

@@ -278,4 +278,82 @@ kadmin.local -q "ktadd -k ${KEYTAB_DIR}/alice.keytab alice@${REALM}" 2>/dev/null
 
 ---
 
-*最后更新：2026-09-27 — 新增 HBase principal + hostname 去连字符*
+## 六、Kerberos Ticket 过期重新认证 — 所有组件命令总表
+
+> **背景**：Kerberos TGT 票据默认有效期 24 小时（本环境配置 `ticket_lifetime=24h`）。
+> 过期后需要重新 `kinit` 才能访问 HDFS / Hive Metastore / HiveServer2 等受保护资源。
+> **服务进程**（HiveServer2 / Flink JM / Spark Thrift Server 等）启动时通过 entrypoint 自动 kinit，
+> 但 **容器重启** 或 **KDC 重建** 后会丢失，需要手动 kinit。
+
+### 6.1 一次性查看所有票据状态
+
+```bash
+# 遍历所有容器的 krb5cc 文件，查看剩余有效时间
+for cc in spark flink hive-server hive-metastore namenode datanode resourcemanager nodemanager iceberg-rest hbase-master hbase-regionserver; do
+  echo "=== $cc ==="
+  docker exec $cc klist 2>&1 | head -3
+done
+```
+
+### 6.2 各组件 kinit 命令
+
+| 组件 | 容器名 | kinit 命令 | 场景 |
+|------|--------|------------|------|
+| **Spark SQL / spark-submit** | `spark` | `docker exec spark kinit -kt /etc/security/keytabs/spark.service.keytab spark/sparkmaster.lakehouse.com@LAKEHOUSE.COM` | spark-sql、spark-submit 提交前 ticket 过期 |
+| **Flink SQL Client** | `flink-jobmanager` | `docker exec flink-jobmanager kinit -kt /etc/security/keytabs/flink.service.keytab flink/flinkjobmanager.lakehouse.com@LAKEHOUSE.COM` | 进入 sql-client 前、提交作业前 |
+| **Hive beeline (容器内)** | `hive-server` | `docker exec hive-server bash -c 'export KRB5CCNAME=/tmp/krb5cc_beeline && kinit -kt /etc/security/keytabs/hive.service.keytab hive/hiveserver.lakehouse.com@LAKEHOUSE.COM && beeline -u "jdbc:hive2://localhost:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM" -e "SHOW DATABASES;"'` | beeline 必须 kinit + beeline 同一个 bash 进程 |
+| **HDFS 操作** | `namenode` | `docker exec namenode bash -c 'kinit -kt /etc/security/keytabs/nn.service.keytab nn/namenode.lakehouse.com@LAKEHOUSE.COM && hdfs dfs -ls /'` | hdfs dfs -ls/-put/-get 等命令前 |
+| **Hive Metastore** | `hive-metastore` | 启动时 entrypoint 已自动 kinit，**一般不需要手动** | 容器重启后若 Metastore 日志里有 Kerberos 错误再手动 |
+| **YARN ResourceManager** | `resourcemanager` | entrypoint 已自动 kinit | 同 Metastore |
+| **YARN NodeManager** | `nodemanager` | entrypoint 已自动 kinit | 同 Metastore |
+| **Iceberg REST** | `iceberg-rest` | entrypoint 已自动 kinit | 同 Metastore |
+| **HBase Master** | `hbase-master` | entrypoint 已自动 kinit（command 里硬编码） | 如果 HBase Shell 报 Kerberos 错误：`docker exec hbase-master bash -c 'kinit -kt /etc/security/keytabs/hbase.service.keytab hbase/hbasemaster.lakehouse.com@LAKEHOUSE.COM && hbase shell -e "status"'` |
+| **HBase Regionserver** | `hbase-regionserver` | entrypoint 已自动 kinit | 同 Master |
+| **DBeaver (Windows Hive)** | — | **Windows 上 kinit**（二选一）<br>A. 密码：`<br>& "C:\Program Files\MIT\Kerberos\bin\kinit.exe" lakehouse@LAKEHOUSE.COM` 然后输入 `lakehouse123`<br>B. keytab：`<br>& "C:\Program Files\MIT\Kerberos\bin\kinit.exe" -kt C:\kerberos\lakehouse.keytab lakehouse@LAKEHOUSE.COM` | DBeaver 连接 HiveServer2 前先拿 TGT；TGT 过期后必须重新 kinit（DBeaver 不会自动续） |
+
+### 6.3 通配符一键重新认证（所有 service keytab）
+
+```bash
+# 对所有有 service keytab 的容器批量 kinit (可复制粘贴直接跑)
+for pair in \
+  "spark spark.service.keytab sparkmaster" \
+  "flink-jobmanager flink.service.keytab flinkjobmanager" \
+  "hive-server hive.service.keytab hiveserver" \
+  "hive-metastore hive.service.keytab hivemetastore" \
+  "namenode nn.service.keytab namenode" \
+  "resourcemanager rm.service.keytab resourcemanager" \
+  "iceberg-rest iceberg.service.keytab iceberg-rest" \
+  "hbase-master hbase.service.keytab hbasemaster"; do
+  container=$(echo $pair | awk '{print $1}')
+  keytab=$(echo $pair | awk '{print $2}')
+  host=$(echo $pair | awk '{print $3}')
+  echo -n "$container → "
+  docker exec $container kinit -kt /etc/security/keytabs/$keytab $host.lakehouse.com@LAKEHOUSE.COM 2>&1 && echo "OK" || echo "FAIL"
+done
+```
+
+### 6.4 DBeaver（Windows）TGT 过期处理
+
+DBeaver 连接 HiveServer2 Kerberos 失败（`GSS initiate failed` / `No valid credentials`）时：
+
+```powershell
+# 先清掉旧票据
+& "C:\Program Files\MIT\Kerberos\bin\kdestroy.exe"
+
+# 重新拿 TGT (密码式)
+& "C:\Program Files\MIT\Kerberos\bin\kinit.exe" lakehouse@LAKEHOUSE.COM
+# 输入密码: lakehouse123
+
+# 或者 keytab 式（推荐，不用输密码）
+& "C:\Program Files\MIT\Kerberos\bin\kinit.exe" -kt C:\kerberos\lakehouse.keytab lakehouse@LAKEHOUSE.COM
+
+# 验证
+& "C:\Program Files\MIT\Kerberos\bin\klist.exe"
+```
+
+> ⚠️ DBeaver **不会自动续期** Kerberos TGT。TGT 24 小时过期后必须手动 kinit 再重新连接。
+> 可以在 Windows 任务计划程序里每天跑一次 kinit 避免中断。
+
+---
+
+*最后更新：2026-09-28 — 新增第六节 Kerberos Ticket 过期处理总表 + 所有组件 kinit 命令*
