@@ -74,7 +74,7 @@
   </property>
   <property>
     <name>hive.execution.engine</name>
-    <value>mr</value>
+    <value>tez</value>
   </property>
   <property>
     <name>hive.exec.scratchdir</name>
