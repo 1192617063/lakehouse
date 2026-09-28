@@ -65,9 +65,13 @@ SELECT COUNT(*) FROM default.t_lakehouse_practice;
 # 2. Trino 查
 docker exec trino trino --execute "SELECT * FROM hive.default.t_lakehouse_practice ORDER BY id"
 
-# 3. Hive Beeline 查
-docker exec hive-server beeline -u 'jdbc:hive2://localhost:21066/default' \
+# 3. Hive Beeline 查 (需要 Kerberos: kinit + principal URL 参数)
+docker exec hive-server bash -c '
+export KRB5CCNAME=/tmp/krb5cc_beeline
+kinit -kt /etc/security/keytabs/hive.service.keytab hive/hiveserver.lakehouse.com@LAKEHOUSE.COM
+beeline -u "jdbc:hive2://localhost:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM" \
   -e "SELECT AVG(price), SUM(stock) FROM t_lakehouse_practice"
+'
 ```
 
 **验证**：三个引擎返回相同聚合值 = 通过。

@@ -1964,9 +1964,14 @@ hdfs dfs -rm /test.txt
 '
 ```
 
-**Hive Metastore：**
+**Hive Server (beeline)：**
 ```bash
-docker exec hive-metastore beeline -u "jdbc:hive2://hive-server:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM" -e "SHOW DATABASES;"
+docker exec hive-server bash -c '
+export KRB5CCNAME=/tmp/krb5cc_beeline
+kinit -kt /etc/security/keytabs/hive.service.keytab hive/hiveserver.lakehouse.com@LAKEHOUSE.COM
+beeline -u "jdbc:hive2://localhost:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM" \
+  -e "SHOW DATABASES;"
+'
 ```
 
 **Flink：**

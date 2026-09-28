@@ -234,7 +234,7 @@ sleep 30  # 等 Kerberos KDC 和 namenode 起来
 | Spark SQL | `docker exec spark bash -c 'echo lakehouse123 \| kinit lakehouse@LAKEHOUSE.COM && spark-sql --master local[1] -e "SHOW DATABASES;"'` | `default`, `cdc_demo` |
 | Flink SQL | `docker exec flink-sql-client bash -c 'ls /opt/flink/lib/'` | 有 iceberg/paimon jar |
 | Trino | `docker exec trino bash -c 'trino --execute "SHOW CATALOGS;"'` | `iceberg`, `hive`, `hudi` |
-| Hive Beeline | `docker exec hive-server bash -c 'echo lakehouse123 \| kinit lakehouse@LAKEHOUSE.COM && timeout 15 beeline -u "jdbc:hive2://hiveserver.lakehouse.com:21066/default;auth=KERBEROS;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM" -e "SHOW DATABASES;"'` | `default`, `cdc_demo` |
+| Hive Beeline | `docker exec hive-server bash -c 'export KRB5CCNAME=/tmp/krb5cc_beeline && kinit -kt /etc/security/keytabs/hive.service.keytab hive/hiveserver.lakehouse.com@LAKEHOUSE.COM && timeout 15 beeline -u "jdbc:hive2://localhost:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM" -e "SHOW DATABASES;"'` | `default`, `cdc_demo` |
 | Iceberg REST | `curl -s http://localhost:8181/v1/namespaces` | JSON namespaces |
 | Kafka | `docker exec kafka bash -c 'kafka-topics.sh --bootstrap-server localhost:9092 --command-config /opt/kafka/config/client.properties --list'` | 列出 topic |
 | Doris | `curl -s http://localhost:8030/api/bootstrap` | Doris FE JSON |
