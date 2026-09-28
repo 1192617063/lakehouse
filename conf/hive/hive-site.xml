@@ -76,6 +76,38 @@
     <name>hive.execution.engine</name>
     <value>tez</value>
   </property>
+
+  <!-- === Tez Session Pool 预热与复用 === -->
+  <!-- HiveServer2 启动时预创建 Tez Session（避免首次查询等待 YARN AM 启动） -->
+  <!-- 默认 false，这就是 hasInitialSessions: false 的根因 -->
+  <property>
+    <name>hive.server2.tez.initialize.default.sessions</name>
+    <value>true</value>
+  </property>
+  <!-- 预热哪些 YARN queue（默认 default queue） -->
+  <property>
+    <name>hive.server2.tez.default.queues</name>
+    <value>default</value>
+  </property>
+  <!-- 每个 queue 预热几个 Tez Session（= 并发 AM 数） -->
+  <property>
+    <name>hive.server2.tez.sessions.per.default.queue</name>
+    <value>1</value>
+  </property>
+  <!-- Session 生命周期（小时），0 = 永不过期 -->
+  <property>
+    <name>hive.server2.tez.session.lifetime</name>
+    <value>24h</value>
+  </property>
+  <!-- 让 Tez AM container 在完成任务后继续存活（复用） -->
+  <property>
+    <name>tez.am.container.reuse.enabled</name>
+    <value>true</value>
+  </property>
+  <property>
+    <name>tez.am.container.idle.release-timeout-ms</name>
+    <value>600000</value>
+  </property>
   <property>
     <name>hive.exec.scratchdir</name>
     <value>/tmp/hive</value>
