@@ -1027,3 +1027,66 @@ JVM 遇到不存在的模块会报错退出。
 ### 21.2 `.lakehouse.com` suffix 是 Kerberos realm 的 DNS 映射
 
 所有容器 hostname 必须用 `.lakehouse.com` 后缀，因为 Kerberos realm 是 `LAKEHOUSE.COM`（kerberos 配置中 `[domain_realm]` 段已将 `.lakehouse.com` 映射到 `LAKEHOUSE.COM`）。
+
+---
+
+## 二十二、Hive beeline 问题
+
+### 22.1 `Unsupported mechanism type PLAIN`
+
+**现象：** `docker exec hive-server beeline -u 'jdbc:hive2://localhost:21066/default'` 连接失败，报 `Unsupported mechanism type PLAIN`。
+
+**根因：** hive-site.xml 里 `hive.server2.authentication=KERBEROS`，HiveServer2 只接受 Kerberos 认证。但 beeline 默认尝试 PLAIN 机制，没带 principal 参数。
+
+**解决方案：** beeline 的 JDBC URL 必须加 Kerberos principal 参数，并先 kinit 获取 TGT：
+```bash
+docker exec hive-server bash -c '
+export KRB5CCNAME=/tmp/krb5cc_beeline
+kinit -kt /etc/security/keytabs/hive.service.keytab hive/hiveserver.lakehouse.com@LAKEHOUSE.COM
+beeline -u "jdbc:hive2://localhost:21066/default;principal=hive/hiveserver.lakehouse.com@LAKEHOUSE.COM" \
+  -e "SELECT * FROM t_lakehouse_practice LIMIT 5"
+'
+```
+> ⚠️ kinit 和 beeline 必须在**同一个 bash 进程**里执行（否则 TGT 缓存不可见）。如果 `docker exec` 分成两个 -c 命令，第二个看不到 kinit 拿到的 ticket。
+
+### 22.2 `beeline: command not found` / `kinit: command not found`
+
+**现象：** hive-server 容器里找不到 beeline 或 kinit。
+
+**根因：** `apache/hive:3.1.3` 官方镜像里有 beeline，但**没有 Kerberos 客户端工具**（kinit/klist）。HiveServer2 进程在 Java 层做 Kerberos，但 beeline（JDBC 客户端）需要系统层 kinit 来拿 TGT。
+
+**解决方案：** 创建自定义 Hive 镜像 `build/hive/Dockerfile`，手动安装 krb5-user：
+- Debian 11 bullseye 已 EOL，`deb11u8` 安全补丁包在所有镜像源都 404
+- 用主仓库 `deb11u5` 版本，**手动 dpkg -i 离线安装**（预下载 .deb 到 `build/hive/debs/`）
+- Dockerfile 里 `COPY build/hive/debs/*.deb` → `dpkg -i` 一次性安装
+- `krb5-config` → `bind9-host` 依赖用 `--force-depends` 跳过（不需要 DNS SRV 记录）
+
+### 22.3 `Failed to create directory: /home/hive/.beeline`
+
+**现象：** beeline 启动时 WARN 说找不到 `/home/hive/.beeline` 目录。
+
+**根因：** hive 用户（uid 1000）在镜像里没有 `/home/hive`。`apache/hive:3.1.3` 镜像默认用 hive 用户运行，但 entrypoint 没创建 home dir。
+
+**解决方案：** Dockerfile 里提前创建：
+```dockerfile
+RUN mkdir -p /home/hive && chown hive:hive /home/hive
+```
+
+### 22.4 SLF4J `Class path contains multiple SLF4J bindings`
+
+**现象：** beeline 启动时打印 4 条 WARN，说有两个 SLF4J 绑定实现：
+```
+SLF4J: Found binding in [jar:file:/opt/hive/lib/log4j-slf4j-impl-2.17.1.jar!...]
+SLF4J: Found binding in [jar:file:/opt/hadoop/share/hadoop/common/lib/slf4j-reload4j-1.7.36.jar!...]
+SLF4J: Actual binding is of type [org.apache.logging.slf4j.Log4jLoggerFactory]
+```
+
+**根因：** Hive 3.1.3 用 **log4j2** 作为 logging backend（`log4j-slf4j-impl-2.17.1.jar`），Hadoop 3.3.6 用 **reload4j**（`slf4j-reload4j-1.7.36.jar`）。两个都是 SLF4J 绑定实现，不能同时出现在 classpath。Hadoop 通过 volume 挂载 `/opt/hadoop` 进来，我们不能删除那个 jar。
+
+**为什么无害：** SLF4J 选择了 Hive 的 log4j2 绑定（输出说 `Actual binding is of type Log4jLoggerFactory`），所有日志都正常走 log4j2 了。
+
+**解决方案（可选）：** 如果想消除这个 WARN，可以：
+1. 在 hive 的 entrypoint 里把 Hadoop 的 slf4j-reload4j jar 从 classpath 排除（修改 HADOOP_CLASSPATH）
+2. 或者挂载一个空 jar 覆盖 Hadoop 的 slf4j-reload4j
+
+当前实现：**接受这个 WARN**，不影响功能。
